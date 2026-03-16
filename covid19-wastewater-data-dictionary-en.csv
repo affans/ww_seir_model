@@ -1,0 +1,21 @@
+variable,description
+Location,"The catchment area of the reported result. Can be at the collection site, city, province/territory, or national level."
+site,The wastewater collection site. This is left blank if the reported results are aggregated results of multiple sites.
+city,The city where wastewater samples were collected.. This is left blank if the reported results are aggregated results of multiple cities.
+province,The province/territory where wastewater samples were collected.. This is left blank if the reported resutls are aggregated results of mutliple provinces/territories.
+country,The country where wastewater samples were collected.
+EpiYear,The year of wastewater sample collection. Based on the Sunday of the reported week.
+EpiWeek,The epidemiological week of wastewater sample collection. 
+weekstart,The date of the Sunday of the reported week.
+measureID,The respiratory virus target (covN2 represents SARS-CoV-2)
+w_avg,The weekly average of wastewater viral concentration. The average is adjusted for population coverage for multiple site aggregations.
+min,The lowest recorded weekly average over the years for this specific epidemiological week.
+max,The highest recorded weekly average over the years for this specific epidemiological week.
+populationcoverage,The percentage of population (in decimals) captured by the wastewater catchment area. This is left blank for site-level catchment areas.
+pruid,Unique province or territory identifier.
+latestTrends,"Describes if the trend over the past 5 weeks is showing an increase, a decrease, no change, or no recent data for trending."
+t_low,"The threshold used to identify between ""Low"" and ""Moderate"" wastewater viral concentration. Thresholds are determined on the past year of viral concentrations and are unique to each location."
+t_high,"The threshold used to identify between ""Moderate"" and ""High"" wastewater viral concentration. Thresholds are determined on the past year of viral concentrations and are unique to each location."
+LatestLevel,"A 4-level summary of the latest wastewater viral concentration. Values are Non-detect, Low, Moderate, and High."
+Grouping,"The level of aggregation across collection sites. Values are Site, City, Province, and Canada."
+Viral_Activity_Level,Summary level of respiratory activity that is calculated from the latest levels and trends. 
