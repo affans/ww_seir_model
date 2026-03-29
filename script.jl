@@ -196,9 +196,9 @@ end
         obs_ww_cov, 
         obs_ww_rsv,
         pop_size,
-        I_flu_0 = 2.0,
-        I_cov_0 = 500.0, 
-        I_rsv_0 = 2.0,
+        I_flu_0,
+        I_cov_0, 
+        I_rsv_0,
         I_cov_flag = false # flag 
 
     )
@@ -235,8 +235,11 @@ end
     M_r ~ LogNormal(0, 0.5)
 
     #  exponential is s Numerically Fragile (can sample too close to 0) which in the division below causes issue (since phi is the dispersion in the NB).  A more robust prior is:
-    # phi ~ Exponential(1.0) # the dispersion parameter for the Negative Binomial likelihood.
-    phi ~ Gamma(2.0, 1.0)   # mean=2, bounded away from zero
+    
+    # switching the likelihood to Normal. Initially was NB, but that's for discrete data. 
+    # observation noise on log scale, Exponential(0.3) has mean 0.3, 
+    # which implies ~30% multiplicative noise, reasonable for WW data
+    sigma_obs ~ Exponential(0.5)   # observation noise on log scale
 
     # setup the ODE for running 
     # get the timing
@@ -309,29 +312,26 @@ end
             mu_c = max(mean(Wᵥ_sim[idx_end-6 : idx_end]), 1e-6)
             mu_r = max(mean(Wᵣ_sim[idx_end-6 : idx_end]), 1e-6)
             
-            p_flu = phi / (phi + mu_i) # convert to rate/dispersion for NB
-            if !ismissing(obs_ww_flu[w]) 
-                # if the observed ww signal is very low (below 0.03), it is at the LOD 
-                # it means the the signal is somewhere between 0 and 0.021. 
-                # I think we can just get by with saying it's 0, since the likelihood will be very similar for any value in that range, and it simplifies the math a lot.
-                if obs_ww_flu[w] <= 0.03
-                    Turing.@addlogprob! logpdf(NegativeBinomial(phi, p_flu), 0)
+
+            if !ismissing(obs_ww_flu[w])
+                if obs_ww_flu[w] <= 0.03   # at LOD: P(X <= LOD)
+                    Turing.@addlogprob! logcdf(LogNormal(log(mu_i), sigma_obs), 0.03)
                 else
-                    obs_ww_flu[w] ~ NegativeBinomial(phi, p_flu) 
+                    #Turing.@addlogprob! logpdf(LogNormal(log(mu_i), sigma_obs), obs_ww_flu[w])
+                    obs_ww_flu[w] ~ LogNormal(log(mu_i), sigma_obs)
                 end
             end
 
-            p_cov = phi / (phi + mu_c) # conver to rate/dispersion
+            
             if !ismissing(obs_ww_cov[w]) 
-                obs_ww_cov[w] ~ NegativeBinomial(phi, p_cov) 
+                obs_ww_cov[w] ~ LogNormal(log(mu_c), sigma_obs)
             end
             
-            p_rsv = phi / (phi + mu_r) # convert to rate/dispersion
             if !ismissing(obs_ww_rsv[w]) 
                 if obs_ww_rsv[w] <= 0.09
-                   Turing.@addlogprob! logpdf(NegativeBinomial(phi, p_rsv), 0)
+                    Turing.@addlogprob! logcdf(LogNormal(log(mu_i), sigma_obs), 0.03)
                 else
-                    obs_ww_rsv[w] ~ NegativeBinomial(phi, p_rsv) 
+                    obs_ww_rsv[w] ~ LogNormal(log(mu_r), sigma_obs) 
                 end
             end
         end
@@ -340,7 +340,6 @@ end
 
 function run_inference() 
     N = 285_039  # fix population to Regina
-    
     # initial conditions # we need to estimate covid initial conditions from the data 
     # for regina, flu and rsv were recorded as 0.008213384 which is the LOD (limit of detection)
     # (this needs to be acounted for in the inference model).
@@ -362,6 +361,21 @@ function run_inference()
     obs_rsv = df.rsv_sg
     @assert length(df.flu_sg) == length(df.cov_sg) == length(df.rsv_sg)
 
+    # Provide initial parameters at biologically plausible values
+    # that are known to produce a valid ODE solution and finite likelihood.
+    # These are not the "true" values — just a valid starting point for warmup.
+    # init_params = (
+    #     θ       = 1.0,    # weak interference, well within prior support
+    #     βᵢ      = 0.3,    # plausible flu transmission
+    #     βᵥ      = 0.25,   # plausible covid transmission  
+    #     βᵣ      = 0.2,    # plausible rsv transmission
+    #     M_c     = 1.0,    # neutral scaling
+    #     M_f     = 1.0,
+    #     M_r     = 1.0,
+    #     phi     = 5.0,    # moderate dispersion, well away from zero
+    #     _I_cov_0 = 300.0  # reasonable seed given WW signal ~25-46 gc/L
+    # )
+
     model = inference_model(obs_flu, obs_covid, obs_rsv, N, Iᵢ, Iᵥ, Iᵣ, true)
     chain = sample(model, NUTS(), MCMCThreads(), 1000, 4)  # 1000 samples, 4 chains for parallel sampling
     return chain
@@ -378,6 +392,7 @@ function basic_inference_model(test_theta = 0.0)
     # but only fits up to observed incidence, not wastewater 
     # it's just a test to see if the model even runs. 
 
+    println("theta value: $test_theta")
     # generate the simulated data from ODE 
     # match the parameters in  sym_ode_model(), 
     N = 10000  # test population
@@ -430,10 +445,17 @@ function basic_inference_model(test_theta = 0.0)
         length of weekly converted 'observed' WW: $(length(Wᵢ_sim))
     ")
 
-    obs_flu = Float64.(rand.(Poisson.(Wᵢ_sim)))
-    obs_covid = Float64.(rand.(Poisson.(Wᵥ_sim)))
-    obs_rsv =  Float64.(rand.(Poisson.(Wᵣ_sim)))
+    # add noise to the WW signal 
+    sigma_test = 0.3   # pick a plausible observation noise
+    obs_flu  = rand.(LogNormal.(log.(Wᵢ_sim .+ 1e-6), sigma_test))
+    obs_covid = rand.(LogNormal.(log.(Wᵥ_sim .+ 1e-6), sigma_test))
+    obs_rsv  = rand.(LogNormal.(log.(Wᵣ_sim .+ 1e-6), sigma_test))
+
+    # obs_flu = Float64.(rand.(Poisson.(Wᵢ_sim)))
+    # obs_covid = Float64.(rand.(Poisson.(Wᵥ_sim)))
+    # obs_rsv =  Float64.(rand.(Poisson.(Wᵣ_sim)))
     
+    #return obs_rsv
     ## plot these with incidence curves to see if they look reasonable 
     
     @gp "reset"
@@ -452,7 +474,6 @@ function basic_inference_model(test_theta = 0.0)
     chain = sample(my_model, NUTS(), 1000)
     return chain
 end
-
 ########################################################################## 
 ####### TEST MODEL  (basic SIR model with Bayesian parameter inference)
 ########################################################################## 
