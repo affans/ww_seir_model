@@ -183,16 +183,19 @@ end
 
 # set up a Turing model 
 @model function inference_model(
-    obs_ww_flu, # now length = (wind in weeks) + main_weeks
-    obs_ww_cov, 
-    obs_ww_rsv,
-    initial_cond, # initial conditions at week 26 
-    pop_size
+        obs_ww_flu, # now length = wind-in weeks + main_weeks
+        obs_ww_cov, 
+        obs_ww_rsv,
+        pop_size,
+        I_flu_0 = 2.0,
+        I_cov_0 = 500.0, 
+        I_rsv_0 = 2.0,
+        I_cov_flag = false # flag 
+
     )
     # obs_ww_flu, obs_ww_cov, obs_ww_rsv are the 
     # observed wastewater signals for each virus,
     # which we will compare to the simulated wastewater signal from the ODE.
-    # u₀ and tspan are the initial conditions and time span for the ODE, 
     
     # general idea is to sample the relevant parameters (like beta and theta) 
     # and then run the ODE to get the simulated incidence
@@ -207,9 +210,8 @@ end
     # because θ = 0 is the null hypothesis, we want to allow the sampler to explore values close to 0.
     # if it's always truncated like this, then maybe all credible intervals will be 
     # entirely above 0, which might be misleading.
-    # See notes for details 
-    
-    θ ~ Truncated(Normal(0, 1.0), 0, Inf)
+    # See written notes for details on the variance of this prior and how it affects the inference. 
+    θ ~ Truncated(Normal(0, 5.0), 0, Inf) 
 
     # transmission parameters for each virus. 
     βᵢ ~ Truncated(LogNormal(log(0.1), 1.0), 0.0, 1.5) 
@@ -217,11 +219,13 @@ end
     βᵣ ~ Truncated(LogNormal(log(0.1), 1.0), 0.0, 1.5) 
 
     # scaling factors to map the ODE's I(t) to the observed wastewater signal though convolution
-    M_c ~ LogNormal(0, 2.0)
-    M_f ~ LogNormal(0, 2.0)
-    M_r ~ LogNormal(0, 2.0)
+    # for LogNormal(0, 2.0) this is extremely wide, spans [0.018, 54.6] — sampler wastes time at M=30
+    # see Obsidian notes
+    M_c ~ LogNormal(0, 0.5)
+    M_f ~ LogNormal(0, 0.5)
+    M_r ~ LogNormal(0, 0.5)
 
-    #  exponential is s Numerically Fragile (can sample too close to 0) which in the division below causes issue
+    #  exponential is s Numerically Fragile (can sample too close to 0) which in the division below causes issue (since phi is the dispersion in the NB).  A more robust prior is:
     # phi ~ Exponential(1.0) # the dispersion parameter for the Negative Binomial likelihood.
     phi ~ Gamma(2.0, 1.0)   # mean=2, bounded away from zero
 
@@ -231,6 +235,41 @@ end
     days = weeks * 7  
     tspan = (0.0, Float64(days))
     params = [βᵢ, βᵥ, βᵣ, θ, pop_size] # params vector: [βᵢ, βᵥ, βᵣ, θ, N] 
+
+    # Iᵥ: how many people are currently infectious at week 26 with COVID 
+    # Prior is informed by the WW signal magnitude (~25-46 gc/L),
+    # We don't know M_c yet so we can't back-calculate exactly,
+    # but the wind-in weeks will constrain the joint (Iᵥ, M_c) posterior.
+    # Upper bound: implausible that >5% of population infectious simultaneously.
+   
+    # problem with the rounding: When NUTS runs, Iᵥ is not a Float64
+    # it is a ForwardDiff.Dual number carrying derivative information. 
+    # The moment you call round(Int64, Iᵥ), you strip all derivative information 
+    # and force Turing to abandon gradient-based sampling, 
+    # falling back to finite differences or throwing errors. 
+    # The sampler becomes orders of magnitude slower.
+
+    # if bayesian_initial_cond 
+    #     Iᵥ ~ Truncated(Normal(500, 300), 1.0, pop_size * 0.05)
+    #     initial_cond[7] = round(Int64, Iᵥ) # see note above about rounding and dual numbers.
+    # end
+
+    if I_cov_flag
+        # Iᵥ stays as a Dual number — no rounding, no Int conversion
+        # The ODE solver accepts Float64 and Dual numbers equally
+        _I_cov_0 ~ Truncated(Normal(500.0, 300.0), 1.0, pop_size * 0.05)
+    else
+        _I_cov_0 = I_cov_0
+    end
+    
+    # Construct u₀ fresh each sample — no mutation of external arrays
+    # E=0, R=0 everywhere given new-strain assumption
+    initial_cond = [
+        pop_size - I_flu_0, 0.0, I_flu_0, 0.0,   # flu:   S E I R
+        pop_size - _I_cov_0, 0.0, _I_cov_0, 0.0,   # covid: S E I R
+        pop_size - I_rsv_0, 0.0, I_rsv_0, 0.0,   # rsv:   S E I R
+        0.0, 0.0, 0.0                              # incidence
+    ]
     
     # solve the ODE 
     prob = ODEProblem(sym_defn_ode, initial_cond, tspan, params)
@@ -266,6 +305,9 @@ end
             
             p_flu = phi / (phi + mu_i) # convert to rate/dispersion for NB
             if !ismissing(obs_ww_flu[w]) 
+                # if the observed ww signal is very low (below 0.03), it is at the LOD 
+                # it means the the signal is somewhere between 0 and 0.021. 
+                # I think we can just get by with saying it's 0, since the likelihood will be very similar for any value in that range, and it simplifies the math a lot.
                 if obs_ww_flu[w] <= 0.03
                     Turing.@addlogprob! logpdf(NegativeBinomial(phi, p_flu), 0)
                 else
@@ -290,6 +332,35 @@ end
     end
 end
 
+function run_inference() 
+    N = 270_880  # fix population to Regina
+    
+    # initial conditions # we need to estimate covid initial conditions from the data 
+    # for regina, flu and rsv were recorded as 0.008213384 which is the LOD (limit of detection)
+    # (this needs to be acounted for in the inference model).
+    Iᵢ = 2 
+    Iᵥ = 2 # will be replaced in the function (make sure flag is set -- see function definition)
+    Iᵣ = 2
+
+    # what about Recovered people for pre-existing immunity?
+    # we also know there was quite a bit of people with prior exposure to COVID 
+    # so we should set the Recovered compartment for COVID to be non-zero 
+    # at the start of the season, to reflect that prior immunity.
+    # but we are assuming that by the 2024 season, the cross-immunity 
+    # from that prior exposure has waned, which is why we are not setting Rᵥ(0) to be very high.
+
+    # get WW data 
+    df = read_canada() 
+    obs_flu = df.flu_sg
+    obs_covid = df.cov_sg
+    obs_rsv = df.rsv_sg
+    @assert length(df.flu_sg) == length(df.cov_sg) == length(df.rsv_sg)
+
+    model = inference_model(obs_flu, obs_covid, obs_rsv, N, Iᵢ, Iᵥ, Iᵣ, true)
+    chain = sample(model, NUTS(), 1000, 4) # 1000 samples, 4 chains for parallel sampling
+    
+    return chain
+end 
 
 # run a test version of the model 
 # here we generate our own simulated WW from the ODE first 
@@ -297,23 +368,26 @@ end
 # we use 10000 individuals - this is just to test if the model runs 
 # and can recover parameters close to the true value.
 # March 2nd test: works flawlessly, can recover parameters close to the true value.
-function test_inference_model() 
+function basic_inference_model(test_theta = 0.0) 
     # this function just runs the Turing model 
     # but only fits up to observed incidence, not wastewater 
     # it's just a test to see if the model even runs. 
 
-    # generate the simulated data from ODE with the default parameters in sym_ode_model, 
+    # generate the simulated data from ODE 
+    # match the parameters in  sym_ode_model(), 
     N = 10000  # test population
+    
+    # initial 
     u₀ = [9999, 0, 10, 0,  # influenza
           9999, 0, 10, 0,  # covid
           9999, 0, 10, 0, # rsv
           0, 0, 0]  # incidence compartments
-    tspan = (1, 364)
+    tspan = (1, 364) 
     # test parameters
     tβᵢ = 0.28
     tβᵥ = 0.22
     tβᵣ = 0.18
-    tθ = 10  # for testing, generate data with no cross-immunity, and see if we can recover that.
+    tθ = test_theta  # for testing, generate data with no or some cross-immunity, and see if we can recover that.
     params = [tβᵢ, tβᵥ, tβᵣ, tθ, N] 
 
     #Pass to solvers
@@ -325,8 +399,13 @@ function test_inference_model()
     Iᵥ_sim = make_incidence(sol[14, :])
     Iᵣ_sim = make_incidence(sol[15, :])
 
+    # scaling factors 
+    M_f = 2.1
+    M_c = 1.8
+    M_r = 1.3
+
     # convert to wastewater signal using convolution with the kernels 
-    # DO NOT CONVERT TO WEEKLY DATA FIRST 
+    # Do not convert to weekly data right now - 
     # -> it kills the biological resolution of the shedding kernel.
     #  For example, SARS-CoV-2 shedding peaks around day 4 or 5 after infection;
     #  if you aggregate into weeks first, the math cannot accurately apply that daily shedding delay.
@@ -334,15 +413,16 @@ function test_inference_model()
     _Wᵥ_sim = sym_convolve_seir(Iᵥ_sim, K_COV)
     _Wᵣ_sim = sym_convolve_seir(Iᵣ_sim, K_RSV)
 
-    # convert to a weekly signal by taking the mean of each 7 days, and add some noise to simulate observed data. 
-    Wᵢ_sim = mean.(eachcol(reshape(_Wᵢ_sim, 7, :)))
-    Wᵥ_sim = mean.(eachcol(reshape(_Wᵥ_sim, 7, :)))
-    Wᵣ_sim = mean.(eachcol(reshape(_Wᵣ_sim, 7, :)))
+    # convert to a weekly signal by taking the mean of each 7 days, 
+    # and add some noise to simulate observed data. 
+    Wᵢ_sim = mean.(eachcol(reshape(_Wᵢ_sim, 7, :))) * M_f
+    Wᵥ_sim = mean.(eachcol(reshape(_Wᵥ_sim, 7, :))) * M_c
+    Wᵣ_sim = mean.(eachcol(reshape(_Wᵣ_sim, 7, :))) * M_r
 
     println("lengths of vectors: 
-    length of ODE incidence: $(length(Iᵢ_sim))
-    length of ODE simulated WW: $(length(Wᵢ_sim))
-    length of weekly converted 'observed' WW: $(length(Wᵢ_sim))
+        length of ODE incidence: $(length(Iᵢ_sim))
+        length of ODE simulated WW: $(length(Wᵢ_sim))
+        length of weekly converted 'observed' WW: $(length(Wᵢ_sim))
     ")
 
     obs_flu = Float64.(rand.(Poisson.(Wᵢ_sim)))
@@ -362,56 +442,16 @@ function test_inference_model()
     println("plot set, call using @gp in terminal to display.") 
     
     # run 
-    my_model = inference_model(obs_flu, obs_covid, obs_rsv, u₀, N)
+    my_model = inference_model(obs_flu, obs_covid, obs_rsv, N, 10, 10, 10, false)
     println("Starting MCMC Sampling...")
     chain = sample(my_model, NUTS(), 1000)
     return chain
 end
 
-# this function just runs the Turing model 
-function syn_run_inference() 
-    N = 270_880  # test population
-    
-    # initial conditions # we need to estimate covid initial conditions from the data 
-    # for regina, flu and rsv were recorded as 0.008213384 which is the LOD. 
-    # (this needs to be acounted for in the inference model).
-    
-    Iᵥ = 10  # replace with a Bayesian (or back calculation from WW)
-    Iᵢ = 100 
-    Iᵣ = 10
-
-    u₀ = [N - Iᵢ , 0, Iᵢ, 0,  # influenza
-          N - Iᵥ, 0, Iᵥ, 0,  # covid
-          N - Iᵣ, 0, Iᵣ, 0, # rsv
-          0, 0, 0]  # incidence compartments
-    tspan = (1.0, 364) # 52 * 7 
-    params = [0.28, 0.28, 0.18, 0, N]
-
- 
-    # my_model = sym_inference(obs_flu, obs_covid, obs_rsv, u₀, N, tspan)
-    # println("Starting MCMC Sampling...")
-    # chain = sample(my_model, NUTS(), 1000)
-    
-    return chain
-end 
-
-
-
-function establish_ic() 
-    # we need a way to get proper initial conditions for the ODE model.
-    # We can use the WW data to do this. 
-    # looking at the WW data between week 26 and 34, there is no rsv/flu signal, but there is a small covid signal. 
-    # so we can set Iᵢ(0) and Iᵣ(0) to be very small, and set Iᵥ(0) to be a bit higher.
-    # For Iᵢ(0) and Iᵣ(0), we can set them to be 1 or 2, since there is likely 
-    # some low level of infection happening that is just not showing up in the WW signal.
-    # This is biologically interpretable as "a small number of importations 
-    # exist at the start of the season" and is standard practice.
-
-end
-
 ########################################################################## 
 ####### TEST MODEL  (basic SIR model with Bayesian parameter inference)
 ########################################################################## 
+
 # the following are to just test a simple SIR model
 # used to test the proof of concept of runing a Bayesian ODE model.
 function tst_defn_ode_sys(du, u, p, t) 
