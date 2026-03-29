@@ -8,6 +8,14 @@ using Gnuplot
 using Dates
 Gnuplot.options.term = "sixelgd truecolor enhanced size 1000,400 scroll font arial 10"
 
+
+function make_incidence(X) 
+    y = similar(X)
+    y .= X - circshift(X, 1)    
+    y[1] = y[2]
+    return y
+end
+
 # helper function to apply the savitzky-golay in the TidierData pipeline.
 apply_sg(vec) = savitzky_golay(vec, 7, 1).y
 function read_canada() 
@@ -50,7 +58,8 @@ function read_canada()
     @gp :- 2 1:nrow(df) df.flu_sg "with lines title 'flu_sg' lc rgb 'blue'" :-
     @gp :- 3 1:nrow(df) df.rsv "with lines title 'rsv' lc rgb 'black'" :- 
     @gp :- 3 1:nrow(df) df.rsv_sg "with lines title 'rsv_sg' lc rgb 'blue'" :- 
-    @gp 
+    println("plot set, call using @gp in terminal to display.") 
+    #@gp 
     #@mutate(df, covN2_sg = $covN2_sg)
     return df
 end
@@ -254,12 +263,9 @@ end
     #     initial_cond[7] = round(Int64, Iᵥ) # see note above about rounding and dual numbers.
     # end
 
-    if I_cov_flag
-        # Iᵥ stays as a Dual number — no rounding, no Int conversion
-        # The ODE solver accepts Float64 and Dual numbers equally
+    _I_cov_0 = I_cov_0  # initialise with default, stays as Float64 for AD
+    if I_cov_flag # Iᵥ stays as a Dual number — no rounding, no Int conversion, the ODE solver accepts Float64 and Dual numbers equally
         _I_cov_0 ~ Truncated(Normal(500.0, 300.0), 1.0, pop_size * 0.05)
-    else
-        _I_cov_0 = I_cov_0
     end
     
     # Construct u₀ fresh each sample — no mutation of external arrays
@@ -333,7 +339,7 @@ end
 end
 
 function run_inference() 
-    N = 270_880  # fix population to Regina
+    N = 285_039  # fix population to Regina
     
     # initial conditions # we need to estimate covid initial conditions from the data 
     # for regina, flu and rsv were recorded as 0.008213384 which is the LOD (limit of detection)
@@ -357,8 +363,7 @@ function run_inference()
     @assert length(df.flu_sg) == length(df.cov_sg) == length(df.rsv_sg)
 
     model = inference_model(obs_flu, obs_covid, obs_rsv, N, Iᵢ, Iᵥ, Iᵣ, true)
-    chain = sample(model, NUTS(), 1000, 4) # 1000 samples, 4 chains for parallel sampling
-    
+    chain = sample(model, NUTS(), MCMCThreads(), 1000, 4)  # 1000 samples, 4 chains for parallel sampling
     return chain
 end 
 
@@ -592,13 +597,6 @@ function inc_defn_ode(du, u, p, t)
     du[4] = γᵣ * Iᵣ
     du[5] = σᵣ * Eᵣ  # compartment to just hold the incidence (cumulative), so you'll have to take difference
     return nothing
-end
-
-function make_incidence(X) 
-    y = similar(X)
-    y .= X - circshift(X, 1)    
-    y[1] = y[2]
-    return y
 end
 
 function inc_run_ode() 
