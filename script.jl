@@ -2,9 +2,9 @@ using DataFrames, CSV
 using TidierData
 using Random, StatsBase, Distributions
 using DifferentialEquations 
-using Turing, LogDensityProblems
+using Turing, LogDensityProblems, MCMCChains, KernelDensity
 using SavitzkyGolay # filter
-using Gnuplot
+using Gnuplot, PrettyTables
 using Dates
 Gnuplot.options.term = "sixelgd truecolor enhanced size 1000,400 scroll font arial 10"
 
@@ -199,8 +199,8 @@ end
         I_flu_0,
         I_cov_0, 
         I_rsv_0,
-        I_cov_flag = false # flag 
-
+        i0c_bayes = false, # flag 
+        null_model = false
     )
     # obs_ww_flu, obs_ww_cov, obs_ww_rsv are the 
     # observed wastewater signals for each virus,
@@ -241,10 +241,10 @@ end
 
     # M_f and M_r may differ from M_c due to different shedding biology
     # but should be in the same order of magnitude
-    log_M_f ~ Normal(-4.0, 0.5)
+    log_M_f ~ Normal(-4.4, 0.2)
     M_f = exp(log_M_f)
 
-    log_M_r ~ Normal(-4.0, 0.5)
+    log_M_r ~ Normal(-4.4, 0.2)
     M_r = exp(log_M_r)
 
     # switching the likelihood to Normal. Initially was NB, but that's for discrete data. 
@@ -255,7 +255,7 @@ end
     # sigma_obs ~ Truncated(Normal(0, 0.5), 0, Inf)
 
     # better — hard ceiling that reflects smoothed data reality
-    sigma_obs ~ Truncated(Normal(0.3, 0.2), 0.05, 1.5)
+    sigma_obs ~ Truncated(Normal(0.3, 0.2), 0.05, Inf)
 
     # why change from exponential to truncated normal for sigma_obs?
     # A sigma_obs above 1.0 on the log scale is physically implausible 
@@ -269,8 +269,12 @@ end
     weeks = length(obs_ww_flu) # or obs_ww_cov, obs_ww_rsv, they should all be the same length.
     days = weeks * 7  
     tspan = (0.0, Float64(days))
-    params = [βᵢ, βᵥ, βᵣ, θ, pop_size] # params vector: [βᵢ, βᵥ, βᵣ, θ, N] 
 
+    params = [βᵢ, βᵥ, βᵣ, θ, pop_size] # params vector: [βᵢ, βᵥ, βᵣ, θ, N] 
+    if null_model 
+        params = [βᵢ, βᵥ, βᵣ, 0.0, pop_size] # params vector: [βᵢ, βᵥ, βᵣ, θ, N] 
+    end
+    
     # Iᵥ: how many people are currently infectious at week 26 with COVID 
     # Prior is informed by the WW signal magnitude (~25-46 gc/L),
     # We don't know M_c yet so we can't back-calculate exactly,
@@ -289,16 +293,17 @@ end
     #     initial_cond[7] = round(Int64, Iᵥ) # see note above about rounding and dual numbers.
     # end
 
-    _I_cov_0 = I_cov_0  # initialise with default, stays as Float64 for AD
-    if I_cov_flag # Iᵥ stays as a Dual number — no rounding, no Int conversion, the ODE solver accepts Float64 and Dual numbers equally
-        _I_cov_0 ~ Truncated(Normal(500.0, 300.0), 1.0, pop_size * 0.05)
+    # initial value for covid initial conditions
+    i0c = I_cov_0  # initialise with default, stays as Float64 for AD
+    if i0c_bayes # Iᵥ stays as a Dual number — no rounding, no Int conversion, the ODE solver accepts Float64 and Dual numbers equally
+        i0c ~ Truncated(Normal(500.0, 300.0), 1.0, pop_size * 0.05)
     end
     
     # Construct u₀ fresh each sample — no mutation of external arrays
     # E=0, R=0 everywhere given new-strain assumption
     initial_cond = [
         pop_size - I_flu_0, 0.0, I_flu_0, 0.0,   # flu:   S E I R
-        pop_size - _I_cov_0, 0.0, _I_cov_0, 0.0,   # covid: S E I R
+        pop_size - i0c, 0.0, i0c, 0.0,   # covid: S E I R
         pop_size - I_rsv_0, 0.0, I_rsv_0, 0.0,   # rsv:   S E I R
         0.0, 0.0, 0.0                              # incidence
     ]
@@ -335,7 +340,6 @@ end
             mu_c = max(mean(Wᵥ_sim[idx_end-6 : idx_end]), 1e-6)
             mu_r = max(mean(Wᵣ_sim[idx_end-6 : idx_end]), 1e-6)
             
-
             if !ismissing(obs_ww_flu[w])
                 if obs_ww_flu[w] <= 0.015   # at LOD: P(X <= LOD)
                     Turing.@addlogprob! logcdf(LogNormal(log(mu_i), sigma_obs), 0.03)
@@ -344,8 +348,8 @@ end
                     obs_ww_flu[w] ~ LogNormal(log(mu_i), sigma_obs)
                 end
             end
-
             
+            # if doing analysis in more than canada, add LOD if neccessary 
             if !ismissing(obs_ww_cov[w]) 
                 obs_ww_cov[w] ~ LogNormal(log(mu_c), sigma_obs)
             end
@@ -398,9 +402,14 @@ function run_inference()
     #     phi     = 5.0,    # moderate dispersion, well away from zero
     #     _I_cov_0 = 300.0  # reasonable seed given WW signal ~25-46 gc/L
     # )
-    
+
+    # step size that seems to work well: ϵ = 0.00625
     model = inference_model(obs_flu, obs_covid, obs_rsv, N, Iᵢ, Iᵥ, Iᵣ, true)
-    chain = sample(model, NUTS(), MCMCThreads(), 5000, 4)  # 1000 samples, 4 chains for parallel sampling
+    chain = sample(model, NUTS(init_ϵ = 0.00625), MCMCThreads(), 5000, 4)  # 1000 samples, 4 chains for parallel sampling
+    display(summarystats(chain))
+    # create a table of the parameters
+    
+
 
     # extract and plot the implied W_sim curves
     # if they span 0.001 to 10^6, your priors are too wide
@@ -409,6 +418,97 @@ function run_inference()
 
     return chain
 end 
+
+function plot_posterior(chain) 
+    param_names = chain.name_map.parameters
+    x = vec(chain[:, Symbol(param_names[1]), :])   # flatten all chains
+    kd = kde(x)
+    @gp "reset" 
+    @gp :- kd.x kd.density "w l lw 2 lc rgb 'blue'"
+    #@gp :- 1 
+    #@gp
+end
+
+function plot_predictive(chain)
+    
+    nsamples = 200 
+    _samples = sample(chain, nsamples) # 200 parameter samples from the their posterior
+    samples = get(_samples; section=:parameters)
+
+    # get the raw data 
+    df = read_canada() 
+    obs_flu = df.flu_sg
+    obs_covid = df.cov_sg
+    obs_rsv = df.rsv_sg
+    weeks = length(obs_flu)
+
+    Wc_mat = zeros(nsamples, weeks)
+    Wf_mat = zeros(nsamples, weeks)
+    Wr_mat = zeros(nsamples, weeks)
+    
+    #ODE params 
+    N = 285_039  # fix population to Regina
+    # initial conditions # we need to estimate covid initial conditions from the data 
+    # for regina, flu and rsv were recorded as 0.008213384 which is the LOD (limit of detection)
+    # (this needs to be acounted for in the inference model).
+    Iᵢ = 2 
+    Iᵥ = 2 # will be replaced in the loop below
+    Iᵣ = 2
+
+    for i in 1:nsamples
+        # extract parameters for this sample
+        θ = samples[:θ][i]
+        βᵢ = samples[:βᵢ][i]
+        βᵥ = samples[:βᵥ][i]
+        βᵣ = samples[:βᵣ][i]
+        M_c = exp(samples[:log_M_c][i])
+        M_f = exp(samples[:log_M_f][i])
+        M_r = exp(samples[:log_M_r][i])
+        sigma_obs = samples[:sigma_obs][i]
+        _I_cov_0 = samples[:_I_cov_0][i]
+
+        u₀ = [N-2, 0, 2, 0,
+            N-_I_cov_0, 0, _I_cov_0, 0,
+            N-2, 0, 2, 0,
+            0, 0, 0]
+
+        params = [βᵢ, βᵥ, βᵣ, θ, N]
+        tspan  = (0.0, Float64(weeks * 7))
+        prob   = ODEProblem(sym_defn_ode, u₀, tspan, params)
+        sol    = solve(prob, Tsit5(), saveat=1.0)
+        sol_m  = reduce(hcat, sol.u)
+
+        Iᵢ = make_incidence(sol_m[13, :])
+        Iᵥ = make_incidence(sol_m[14, :])
+        Iᵣ = make_incidence(sol_m[15, :])
+        
+        Wf = sym_convolve_seir(Iᵢ, K_FLU) * M_f
+        Wc = sym_convolve_seir(Iᵥ, K_COV) * M_c
+        Wr = sym_convolve_seir(Iᵣ, K_RSV) * M_r
+
+        for w in 1:weeks
+            idx_end = w * 7
+            idx_end > size(Wc, 1) && continue
+            Wc_mat[i, w] = mean(Wc[idx_end-6:idx_end])
+            Wf_mat[i, w] = mean(Wf[idx_end-6:idx_end])
+            Wr_mat[i, w] = mean(Wr[idx_end-6:idx_end])
+        end
+    end
+
+    # plot the data 
+    @gp "reset"
+    @gp :- "set multiplot layout 3, 1" :-
+    @gp :- 1 1:weeks obs_flu "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
+    @gp :- 2 1:weeks obs_covid "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
+    @gp :- 3 1:weeks obs_rsv "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
+    
+    #plot the mean of the predictive wastewater signal 
+    @gp :- 1 1:weeks vec(mean(Wf_mat, dims = 1)) "with lines title 'Pred Flu' lw 2 lc rgb 'blue'" :-
+    @gp :- 2 1:weeks vec(mean(Wc_mat, dims = 1)) "with lines title 'Pred Covid' lw 2 lc rgb 'blue'" :-
+    @gp :- 3 1:weeks vec(mean(Wr_mat, dims = 1)) "with lines title 'Pred RSV' lw 2 lc rgb 'blue'" :-
+    Gnuplot.save("predictive_wastewater.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+end
+
 
 # run a test version of the model 
 # here we generate our own simulated WW from the ODE first 
