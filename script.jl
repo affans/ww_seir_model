@@ -223,23 +223,46 @@ end
     θ ~ Truncated(Normal(0, 5.0), 0, Inf) 
 
     # transmission parameters for each virus. 
-    βᵢ ~ Truncated(LogNormal(log(0.1), 1.0), 0.0, 1.5) 
-    βᵥ ~ Truncated(LogNormal(log(0.1), 1.0), 0.0, 1.5) 
-    βᵣ ~ Truncated(LogNormal(log(0.1), 1.0), 0.0, 1.5) 
+    # βᵢ ~ Truncated(LogNormal(log(0.1), 1.0), 0.0, 1.5) 
+    # βᵥ ~ Truncated(LogNormal(log(0.1), 1.0), 0.0, 1.5) 
+    # βᵣ ~ Truncated(LogNormal(log(0.1), 1.0), 0.0, 1.5) 
+
+    βᵢ ~ Truncated(LogNormal(log(0.3), 0.3), 0.05, 1.0)  #mean 0.31 
+    βᵥ ~ Truncated(LogNormal(log(0.35), 0.3), 0.05, 1.0) #mean 0.37
+    βᵣ ~ Truncated(LogNormal(log(0.25), 0.3), 0.05, 1.0) #mean 0.26
 
     # scaling factors to map the ODE's I(t) to the observed wastewater signal though convolution
     # for LogNormal(0, 2.0) this is extremely wide, spans [0.018, 54.6] — sampler wastes time at M=30
     # see Obsidian notes
-    M_c ~ LogNormal(0, 0.5)
-    M_f ~ LogNormal(0, 0.5)
-    M_r ~ LogNormal(0, 0.5)
-
-    #  exponential is s Numerically Fragile (can sample too close to 0) which in the division below causes issue (since phi is the dispersion in the NB).  A more robust prior is:
     
+    # anchor M_c to the back-calculation above
+    log_M_c ~ Normal(-4.0, 0.5)   # centered on back-calculation
+    M_c = exp(log_M_c)
+
+    # M_f and M_r may differ from M_c due to different shedding biology
+    # but should be in the same order of magnitude
+    log_M_f ~ Normal(-4.0, 0.5)
+    M_f = exp(log_M_f)
+
+    log_M_r ~ Normal(-4.0, 0.5)
+    M_r = exp(log_M_r)
+
     # switching the likelihood to Normal. Initially was NB, but that's for discrete data. 
     # observation noise on log scale, Exponential(0.3) has mean 0.3, 
-    # which implies ~30% multiplicative noise, reasonable for WW data
-    sigma_obs ~ Exponential(0.5)   # observation noise on log scale
+    # which implies ~30% multiplicative noise, reasonable for WW data (NO, see obsidian notes for why this is too high and leads to poor inference).
+    #sigma_obs ~ Exponential(0.5)   # observation noise on log scale
+    #  update: even this is too high producing a posterior that suggests multiplicative noise of ~7x 
+    # sigma_obs ~ Truncated(Normal(0, 0.5), 0, Inf)
+
+    # better — hard ceiling that reflects smoothed data reality
+    sigma_obs ~ Truncated(Normal(0.3, 0.2), 0.05, 1.5)
+
+    # why change from exponential to truncated normal for sigma_obs?
+    # A sigma_obs above 1.0 on the log scale is physically implausible 
+    # for a laboratory measurement — it implies the observed signal 
+    # could be anywhere from 1/e to e times the true value, 
+    # which is 37% to 270% noise. Your SG-filtered data is smoother 
+    # than raw WW so sigma should be even smaller.
 
     # setup the ODE for running 
     # get the timing
@@ -314,7 +337,7 @@ end
             
 
             if !ismissing(obs_ww_flu[w])
-                if obs_ww_flu[w] <= 0.03   # at LOD: P(X <= LOD)
+                if obs_ww_flu[w] <= 0.015   # at LOD: P(X <= LOD)
                     Turing.@addlogprob! logcdf(LogNormal(log(mu_i), sigma_obs), 0.03)
                 else
                     #Turing.@addlogprob! logpdf(LogNormal(log(mu_i), sigma_obs), obs_ww_flu[w])
@@ -328,7 +351,7 @@ end
             end
             
             if !ismissing(obs_ww_rsv[w]) 
-                if obs_ww_rsv[w] <= 0.09
+                if obs_ww_rsv[w] <= 0.0085   # at LOD: P(X <= LOD)
                     Turing.@addlogprob! logcdf(LogNormal(log(mu_i), sigma_obs), 0.03)
                 else
                     obs_ww_rsv[w] ~ LogNormal(log(mu_r), sigma_obs) 
@@ -375,9 +398,15 @@ function run_inference()
     #     phi     = 5.0,    # moderate dispersion, well away from zero
     #     _I_cov_0 = 300.0  # reasonable seed given WW signal ~25-46 gc/L
     # )
-
+    
     model = inference_model(obs_flu, obs_covid, obs_rsv, N, Iᵢ, Iᵥ, Iᵣ, true)
-    chain = sample(model, NUTS(), MCMCThreads(), 1000, 4)  # 1000 samples, 4 chains for parallel sampling
+    chain = sample(model, NUTS(), MCMCThreads(), 5000, 4)  # 1000 samples, 4 chains for parallel sampling
+
+    # extract and plot the implied W_sim curves
+    # if they span 0.001 to 10^6, your priors are too wide
+    # and the sampler has to explore an enormous space
+    # prior_chain = sample(model, Prior(), 1000)
+
     return chain
 end 
 
@@ -473,6 +502,16 @@ function basic_inference_model(test_theta = 0.0)
     println("Starting MCMC Sampling...")
     chain = sample(my_model, NUTS(), 1000)
     return chain
+end
+
+function plot_chain(chain)
+    theta_chains = chain[:, :θ, :] 
+    @gp "reset"
+    @gp :- theta_chains[:, 1] "with lines title 'Chain 1' lc rgb 'red'" :-
+    @gp :- theta_chains[:, 2] "with lines title 'Chain 2' lc rgb 'blue'" :-
+    @gp :- theta_chains[:, 3] "with lines title 'Chain 3' lc rgb 'green'" :-
+    @gp :- theta_chains[:, 4] "with lines title 'Chain 4' lc rgb 'orange'" :-
+    @gp
 end
 ########################################################################## 
 ####### TEST MODEL  (basic SIR model with Bayesian parameter inference)
