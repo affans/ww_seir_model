@@ -1,0 +1,119 @@
+[Ontario]
+popsize = 3712878 # adjust from 15000000 
+immunity_flu = 0.43
+immunity_cov = 0.70
+immunity_rsv = 0.55
+t_school_flu = 113.0
+t_school_rsv = 94.0
+t_school_cov = 168.0
+n_windin_flu = 23
+n_windin_cov = 0
+n_windin_rsv = 23
+
+[BritishColumbia]
+popsize = 15000000
+immunity_flu = 0.43
+immunity_cov = 0.70
+immunity_rsv = 0.55
+t_school_flu = 113.0
+t_school_rsv = 94.0
+t_school_cov = 168.0
+n_windin_flu = 23
+n_windin_cov = 0
+n_windin_rsv = 23
+
+[Alberta]
+popsize = 0
+immunity_flu = 0.0
+immunity_cov = 0.0
+immunity_rsv = 0.0
+t_school_flu = 0.0
+t_school_rsv = 0.0
+t_school_cov = 0.0
+n_windin_flu = 0
+n_windin_cov = 0
+n_windin_rsv = 0
+
+[Manitoba]
+popsize = 0
+immunity_flu = 0.0
+immunity_cov = 0.0
+immunity_rsv = 0.0
+t_school_flu = 0.0
+t_school_rsv = 0.0
+t_school_cov = 0.0
+n_windin_flu = 0
+n_windin_cov = 0
+n_windin_rsv = 0
+
+[NewBrunswick]
+popsize = 0
+immunity_flu = 0.0
+immunity_cov = 0.0
+immunity_rsv = 0.0
+t_school_flu = 0.0
+t_school_rsv = 0.0
+t_school_cov = 0.0
+n_windin_flu = 0
+n_windin_cov = 0
+n_windin_rsv = 0
+
+[Newfoundland]
+popsize = 0
+immunity_flu = 0.0
+immunity_cov = 0.0
+immunity_rsv = 0.0
+t_school_flu = 0.0
+t_school_rsv = 0.0
+t_school_cov = 0.0
+n_windin_flu = 0
+n_windin_cov = 0
+n_windin_rsv = 0
+
+[NovaScotia]
+popsize = 0
+immunity_flu = 0.0
+immunity_cov = 0.0
+immunity_rsv = 0.0
+t_school_flu = 0.0
+t_school_rsv = 0.0
+t_school_cov = 0.0
+n_windin_flu = 0
+n_windin_cov = 0
+n_windin_rsv = 0
+
+[PEI]
+popsize = 0
+immunity_flu = 0.0
+immunity_cov = 0.0
+immunity_rsv = 0.0
+t_school_flu = 0.0
+t_school_rsv = 0.0
+t_school_cov = 0.0
+n_windin_flu = 0
+n_windin_cov = 0
+n_windin_rsv = 0
+
+[Quebec]
+popsize = 0
+immunity_flu = 0.0
+immunity_cov = 0.0
+immunity_rsv = 0.0
+t_school_flu = 0.0
+t_school_rsv = 0.0
+t_school_cov = 0.0
+n_windin_flu = 0
+n_windin_cov = 0
+n_windin_rsv = 0
+
+[Saskatchewan]
+popsize = 0
+immunity_flu = 0.0
+immunity_cov = 0.0
+immunity_rsv = 0.0
+t_school_flu = 0.0
+t_school_rsv = 0.0
+t_school_cov = 0.0
+n_windin_flu = 0
+n_windin_cov = 0
+n_windin_rsv = 0

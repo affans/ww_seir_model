@@ -6,62 +6,45 @@ using Turing, LogDensityProblems
 using MCMCChains, KernelDensity
 using SavitzkyGolay # filter
 using Gnuplot, PrettyTables, TerminalPager
-using Dates
+using Dates, Parameters, Configurations, TOML, GarishPrint
 Gnuplot.options.term = "sixelgd truecolor enhanced size 1000,400 scroll font arial 10"
-
 # when adding new packages, avoid precompilation by
 # pkg> add --preserve=all Example 
 # and see https://pkgdocs.julialang.org/dev/environments/#Controlling-Auto-precompilation
 
+@option struct ProvinceParams
+    popsize::Int
+    immunity_flu::Float64
+    immunity_cov::Float64
+    immunity_rsv::Float64
+    t_school_flu::Float64
+    t_school_rsv::Float64
+    t_school_cov::Float64
+    n_windin_flu::Int
+    n_windin_cov::Int
+    n_windin_rsv::Int
+end
+Base.show(io::IO, ::MIME"text/plain", x::ProvinceParams) = GarishPrint.pprint_struct(io, x)
+
+# helper functions to apply the savitzky-golay in the TidierData pipeline.
 function make_incidence(X) 
     y = similar(X)
     y .= X - circshift(X, 1)    
     y[1] = y[2]
     return y
 end
-
-# helper function to apply the savitzky-golay in the TidierData pipeline.
 apply_sg(vec) = savitzky_golay(vec, 5, 2).y
 logistic(x) = 1.0 / (1.0 + exp(-x))
 
-function province_params(name) 
-    if name == "Regina"
-        N = 285_039
-        immunity_flu = 0.45
-        immunity_cov = 0.70  
-        immunity_rsv = 0.55
-    elseif name == "British Columbia"
-        N = 5_658_528    
-        immunity_flu = 0.45
-        immunity_cov = 0.70  
-        immunity_rsv = 0.55
-    elseif name == "Ontario"
-        N = 15_000_000
-        immunity_flu = 0.43
-        immunity_cov = 0.65  
-        immunity_rsv = 0.53
-    else
-        error("Province not recognized. Please add parameters for $name.")
-    end
-    return N, immunity_flu, immunity_cov, immunity_rsv
-end
-
 function read_province(name) 
-    # provinces = [
-    #     "Alberta",
-    #     "British Columbia",
-    #     "Manitoba",
-    #     "New Brunswick",
-    #     "Newfoundland and Labrador",
-    #     "Nova Scotia",
-    #     "Ontario",
-    #     "Prince Edward Island",
-    #     "Quebec",
-    #     "Saskatchewan"
-    # ]
     # unable to do: New Brunswick and Sask 
     # Newfoundland, PEI have slightly less data. 
     println("getting data for province: $name")
+     # Parse the whole file into a nested dictionary
+    data = TOML.parsefile("parameters.toml")
+    !haskey(data, name) && error("Province '$name' not found")
+    
+    params_obj = from_dict(ProvinceParams, data[name]) # convert Configurations struct
 
     df = DataFrame(CSV.File("canada_wastewater.csv"))
     # clean up a little 
@@ -80,12 +63,6 @@ function read_province(name)
         @mutate(rsv_sg = ~apply_sg(rsv)) # the ~ means not to vectorize. 
     end
 
-    # calculate how many obs over LOD 
-    n_flu_above = sum(skipmissing(df.flu .> minimum(df.flu)))
-    n_rsv_above = sum(skipmissing(df.rsv .> minimum(df.rsv)))
-    n_total = nrow(df)
-    println("Flu above LOD: $n_flu_above / $n_total weeks ($(round(100*n_flu_above/n_total, digits=1))%)")
-    println("RSV above LOD: $n_rsv_above / $n_total weeks ($(round(100*n_rsv_above/n_total, digits=1))%)")
     # plot the data
     @gp "reset" 
     @gp :- "set multiplot layout 1, 3" :- # 1 row, 3 columns
@@ -97,8 +74,55 @@ function read_province(name)
     @gp :- 3 1:nrow(df) df.rsv_sg "with lines title 'rsv_sg' lc rgb 'blue'" :- 
     println("plot set, call using @gp in terminal to display.") 
 
-    return df
+
+    # print LOD week starts. We are assuming LOD < 1 is no signal. 
+    # WW data is in weeks, so convert to days.
+    lod_week_start_flu = find_emergence_week(df.flu_sg, 1.0) * 7 - 6 
+    lod_week_start_cov = find_emergence_week(df.cov_sg, 1.0) * 7 - 6
+    lod_week_start_rsv = find_emergence_week(df.rsv_sg, 1.0) * 7 - 6
+    println("LOD week start (threshold: 1.0): 
+              flu: $lod_week_start_flu, 
+              covid: $lod_week_start_cov, 
+              rsv: $lod_week_start_rsv
+              
+            Use information to set the correct wind-in period in province parameters")
+
+    return df::DataFrame, params_obj
 end
+
+
+function find_emergence_week(signal, threshold=1.0)
+    # find first week where signal exceeds threshold for 2+ consecutive weeks
+    for wk in 1:length(signal)-1
+        if signal[wk] > threshold && signal[wk+1] > threshold
+            return wk
+        end
+    end
+    return length(signal)
+end
+
+function check_M_priors()
+    df = read_province("Ontario")
+    N, immunity_flu, immunity_cov, immunity_rsv = province_params("Ontario") # initial conditions for the ODE, based on province parameters.
+    N = round(Int64, N * unique(df.populationcoverage)[1]) # adjust the effective population
+    println("population of Ontario, adjusted: $N")
+
+    W_cov_peak = maximum(skipmissing(df.cov_sg))
+    W_flu_peak = maximum(skipmissing(df.flu_sg))
+    W_rsv_peak = maximum(skipmissing(df.rsv_sg))
+    
+    # rough peak prevalence assuming R_eff and SEIR dynamics
+    # peak_I/N ≈ S0/N × (1 - 1/Reff) × 0.3  (rough rule of thumb)
+    Reff_cov = 1.2; Reff_flu = 1.35; Reff_rsv = 1.5
+    peak_frac_cov = (1 - immunity_cov) * (1 - 1/Reff_cov) * 0.3
+    peak_frac_flu = (1 - immunity_flu) * (1 - 1/Reff_flu) * 0.3
+    peak_frac_rsv = (1 - immunity_rsv) * (1 - 1/Reff_rsv) * 0.3
+    
+    println("Implied log_M_c: $(round(log(W_cov_peak / peak_frac_cov), digits=2))")
+    println("Implied log_M_f: $(round(log(W_flu_peak / peak_frac_flu), digits=2))")
+    println("Implied log_M_r: $(round(log(W_rsv_peak / peak_frac_rsv), digits=2))")
+end
+
 
 function sym_defn_ode(du, u, p, t)
     # definitions of SEIR models for each covid, flu, rsv virus 
@@ -115,16 +139,19 @@ function sym_defn_ode(du, u, p, t)
     Sᵥ, Eᵥ, Iᵥ, Rᵥ,
     Sᵣ, Eᵣ, Iᵣ, Rᵣ = u
 
-    βᵢ_base, βᵢ_peak, βᵥ_base, βᵥ_peak, βᵣ_base, βᵣ_peak, θ, N = p
-    t_school = 154.0
-    school = 1.0 / (1.0 + exp(-(t - t_school) / 7.0))
-    βᵢ = βᵢ_base + (βᵢ_peak - βᵢ_base) * school
-    βᵥ = βᵥ_base + (βᵥ_peak - βᵥ_base) * school
-    βᵣ = βᵣ_base + (βᵣ_peak - βᵣ_base) * school
-    
-
-
-    #βᵢ, βᵥ, βᵣ, θ, N = p # unpack parameters
+    # tight priors — within ±3 weeks of data-informed center
+    # t_school_flu = 113.0 
+    # t_school_rsv = 94 #115.0 
+    # t_school_cov = 168.0 
+    βᵢ_base, βᵢ_peak, βᵥ_base, βᵥ_peak, βᵣ_base, βᵣ_peak, 
+        θ, N, ε_flu, ε_cov, ε_rsv, 
+        t_school_flu, t_school_cov, t_school_rsv = p
+    school_flu = 1.0 / (1.0 + exp(-(t - t_school_flu) / 7.0))
+    school_cov = 1.0 / (1.0 + exp(-(t - t_school_cov) / 7.0))
+    school_rsv = 1.0 / (1.0 + exp(-(t - t_school_rsv) / 7.0))
+    βᵢ = βᵢ_base + (βᵢ_peak - βᵢ_base) * school_flu
+    βᵥ = βᵥ_base + (βᵥ_peak - βᵥ_base) * school_cov
+    βᵣ = βᵣ_base + (βᵣ_peak - βᵣ_base) * school_rsv
 
     # calculate the forcce of infection 
     sᵢ = exp(-θ * ((Iᵥ + Iᵣ) / N))
@@ -137,20 +164,20 @@ function sym_defn_ode(du, u, p, t)
     λᵣ = βᵣ * (Iᵣ / N) * sᵣ
     
     #flu 
-    du[1] = -λᵢ * Sᵢ   
-    du[2] = λᵢ * Sᵢ - σᵢ * Eᵢ
+    du[1] = -λᵢ * Sᵢ - ε_flu
+    du[2] = λᵢ * Sᵢ - σᵢ * Eᵢ + ε_flu
     du[3] = σᵢ * Eᵢ - γᵢ * Iᵢ
     du[4] = γᵢ * Iᵢ
 
     #covid
-    du[5] = -λᵥ * Sᵥ
-    du[6] = λᵥ * Sᵥ - σᵥ * Eᵥ
+    du[5] = -λᵥ * Sᵥ - ε_cov
+    du[6] = λᵥ * Sᵥ - σᵥ * Eᵥ + ε_cov
     du[7] = σᵥ * Eᵥ - γᵥ * Iᵥ
     du[8] = γᵥ * Iᵥ
 
     #rsv
-    du[9] = -λᵣ * Sᵣ
-    du[10] = λᵣ * Sᵣ - σᵣ * Eᵣ
+    du[9] = -λᵣ * Sᵣ - ε_rsv
+    du[10] = λᵣ * Sᵣ - σᵣ * Eᵣ + ε_rsv
     du[11] = σᵣ * Eᵣ - γᵣ * Iᵣ
     du[12] = γᵣ * Iᵣ
 
@@ -192,68 +219,33 @@ function sym_convolve_seir(incidence, kernel)
 end
 
 # set up a Turing model 
-@model function inference_model(
-        obs_ww_flu, # now length = wind-in weeks + main_weeks
-        obs_ww_cov, 
-        obs_ww_rsv,
-        lod_ww_flu, # LOD for flu
-        lod_ww_rsv, # LOD for RSV, Covid not needed, strong signal
-        pop_size,
-        immunity_flu, # pre-immunity levels
-        immunity_cov,
-        immunity_rsv
-    )
-    # obs_ww_flu, obs_ww_cov, obs_ww_rsv are the observed wastewater signals for each virus,
-    # which we compare to the simulated wastewater signal from the ODE.    
-    # parameters that will be sampled: theta, beta (3 of them), scaling factors (for WW) + other intermediates if required
-
-
-    # # regina
-    # # log_M_r ~ Normal(-4.3, 0.15)
-    # # M_r = exp(log_M_r)
-    # #Bc 
-    # log_M_r ~ Normal(-4.3, 0.10)
-    # M_r = exp(log_M_r)
-
-    # After this change, M is no longer in gc/L per person — it is now in gc/L per fraction of population infected
-    # The scale changes completely. Back-calculating from your BC COVID data:
-    # M_c = \frac{W_{\text{peak}}}{(I_{\text{peak}}/N)} \approx \frac{50 \text{ gc/L}}{0.002} = 25{,}000 \text{ gc/L per prevalence fraction}
-    # \log M_c \approx \log(25000) \approx 10.1
-    # So  M priors need to be completely recentred:
-    # new — correct scale after per-capita normalisation
+@model function inference_model(obs_ww_flu, obs_ww_cov, obs_ww_rsv, province_params)
+    # unpack the province parameters 
+    (; popsize,
+    immunity_flu, # pre-immunity levels
+    immunity_cov,
+    immunity_rsv, 
+    t_school_flu, # number of days for spike in flu/cov/rsv
+    t_school_cov,
+    t_school_rsv,
+    n_windin_flu, # number of days flu/cov/rsv < LOD
+    n_windin_cov,
+    n_windin_rsv) = province_params
     
-    ## BC values
-    #log_M_c ~ Normal(10.0, 0.5)
-    #log_M_f ~ Normal(9.0, 0.5)   # flu sheds less efficiently per capita
-    #log_M_r ~ Normal(9.0, 0.5)
-    
-    # Flu: W_peak_raw = 42.1, M_f = 42.1 / 0.05 = 842 → log(842) ≈ 6.7
-    # COVID: W_peak_raw = 91.1, M_c = 91.1 / 0.012 = 7600 → log(7600) ≈ 8.9
-    # RSV: W_peak_raw = 23.4, same epidemic dynamics, M_r = 23.4 / (I_peak/N) = 23.4 / 0.042 = 557 → log(557) ≈ 6.3
+
+    # parameters for the wastewater conversion (informed through a backcalculation)
     log_M_c ~ Normal(8.9, 0.4)
     log_M_f ~ Normal(6.9, 0.4)
-    log_M_r ~ Normal(6.3, 0.4)   # updated for raw data
-
+    #log_M_r ~ Normal(6.3, 0.4)   # updated for raw data
+    log_M_r ~ Normal(7.5, 0.5) 
     M_c = exp(log_M_c)
     M_f = exp(log_M_f)
     M_r = exp(log_M_r)
 
-    # switching the likelihood to Normal. Initially was NB, but that's for discrete data. 
-    # observation noise on log scale, Exponential(0.3) has mean 0.3, 
-    # which implies ~30% multiplicative noise, reasonable for WW data (NO, see obsidian notes for why this is too high and leads to poor inference).
-    #sigma_obs ~ Exponential(0.5)   # observation noise on log scale
-    #  update: even this is too high producing a posterior that suggests multiplicative noise of ~7x 
-    # sigma_obs ~ Truncated(Normal(0, 0.5), 0, Inf)
-
-    # better — hard ceiling that reflects smoothed data reality
-    # sigma_obs ~ Truncated(Normal(0.8, 0.2), 0.05, Inf) # regina
-    
-    # BC 
-    #sigma_obs ~ Truncated(Normal(0.6, 0.15), 0.1, 1.2) # BC 
-    # bc may require sepratate sigma_obs for each virus, because the smoothed data suggests covid is less noisy than flu and rsv (see obsidian notes for details on how this affects inference and model fit).
-    sigma_cov ~ truncated(Normal(0.5, 0.15), 0.1, 0.9)   # provincial COVID well-measured
-    sigma_flu ~ truncated(Normal(0.5, 0.15), 0.1, 0.9)   # flu noisier
-    sigma_rsv ~ truncated(Normal(0.9, 0.2),  0.1, 1.5)   # RSV noisiest — allow higher
+    # controls the noise in the likelihood of the wastewater signal.
+    sigma_cov ~ truncated(Normal(0.5, 0.15), 0.1, 0.9)
+    sigma_flu ~ truncated(Normal(0.6, 0.15), 0.2, 1.0)
+    sigma_rsv ~ truncated(Normal(0.9, 0.2),  0.1, 1.5)
 
     # Iᵥ: how many people are currently infectious at week 26 with COVID 
     # Prior is informed by the WW signal magnitude (~25-46 gc/L),
@@ -269,54 +261,39 @@ end
     # The sampler becomes orders of magnitude slower.
 
     # setup the ODE for running 
-
-    # beta values: the posterior of these should be informed 
-    # by literature. Since the model is simple, 
-    # R = beta / recovery. 
-
-    # βᵢ ~ Truncated(LogNormal(log(0.3), 0.3), 0.05, 1.0)  #mean 0.31 
-    # βᵥ ~ Truncated(LogNormal(log(0.35), 0.3), 0.05, 1.0) #mean 0.37
-    # βᵣ ~ Truncated(LogNormal(log(0.25), 0.3), 0.05, 1.0) #mean 0.26
-    
-    # run april 6, okay, large final size
-    # βᵢ ~ Truncated(LogNormal(log(0.34), 0.15), 0.15, 0.6)
-    # βᵥ ~ Truncated(LogNormal(log(0.87), 0.2), 0.65, 1.5)
-    # βᵣ ~ Truncated(LogNormal(log(0.24), 0.15), 0.1, 0.5) #mean 0.26
-
-    #βᵢ ~ truncated(LogNormal(log(0.62), 0.15), 0.35, 1.0)
     #βᵢ ~ truncated(LogNormal(log(0.82), 0.15), 0.35, 1.3)
-    βᵥ ~ truncated(LogNormal(log(0.87), 0.2), 0.40, 1.5)
-    βᵣ ~ truncated(LogNormal(log(0.67), 0.15), 0.40, 1.0)
+    #βᵥ ~ truncated(LogNormal(log(0.87), 0.2), 0.40, 1.5)
+    #βᵣ ~ truncated(LogNormal(log(0.67), 0.15), 0.40, 1.0)
 
     # base beta: pre-school, must be low enough to explain near-zero early flu
     # R_eff_base = βᵢ_base × 0.57 / 0.25 — want R_eff < 1 during COVID suppression
     # peak beta: post-school, must be high enough for 96x rise
     # R_eff_peak = βᵢ_peak × 0.57 / 0.25 — want R_eff ~2-3
     
-    βᵢ_base ~ truncated(Normal(0.35, 0.10), 0.15, 0.55)
-    βᵢ_peak ~ truncated(Normal(0.90, 0.15), 0.60, 1.40)
-    βᵥ_base ~ truncated(Normal(0.55, 0.10), 0.30, 0.80)
+    βᵢ_base ~ truncated(Normal(0.35, 0.10), 0.15, 0.42)
+    βᵢ_peak ~ truncated(Normal(1.05, 0.15), 0.50, 1.50)
+    βᵥ_base ~ truncated(Normal(0.50, 0.10), 0.30, 0.75)
     βᵥ_peak ~ truncated(Normal(0.87, 0.12), 0.60, 1.30)
     βᵣ_base ~ truncated(Normal(0.50, 0.10), 0.25, 0.72)
-    βᵣ_peak ~ truncated(Normal(0.80, 0.12), 0.55, 1.10)
-
+    βᵣ_peak ~ truncated(Normal(1.05, 0.12), 0.55, 1.10)
+   
     # initial values 
     #i0c ~ truncated(Normal(500.0, 300.0), 1.0, pop_size * 0.05) # reigna
     #i0i ~ truncated(Normal(10.0, 20.0), 1.0, 200) # 
-    i0c ~ truncated(Normal(200.0, 500.0), 10.0, pop_size * 0.05)
     #i0r ~ truncated(Normal(5.0, 10.0), 1.0, 200) 
+    i0c ~ truncated(Normal(200.0, 500.0), 10.0, popsize * 0.05)
     i0i = 1.0
     i0r = 1.0
-    
+
     # susceptible 
-    s0i = (1.0 - immunity_flu) * pop_size
-    s0c = (1.0 - immunity_cov) * pop_size
-    s0r = (1.0 - immunity_rsv) * pop_size
+    s0i = (1.0 - immunity_flu) * popsize
+    s0c = (1.0 - immunity_cov) * popsize
+    s0r = (1.0 - immunity_rsv) * popsize
     
     # recovered compartments
-    r0i = immunity_flu * pop_size
-    r0c = immunity_cov * pop_size
-    r0r = immunity_rsv * pop_size
+    r0i = immunity_flu * popsize
+    r0c = immunity_cov * popsize
+    r0r = immunity_rsv * popsize
 
     initial_cond = [
         s0i - i0i, i0i, 0.0, r0i,   # flu:   S E I R
@@ -330,18 +307,17 @@ end
     tspan = (0.0, days)
 
     θ ~ Truncated(Normal(0, 2.0), 0, Inf) 
-    #params = [βᵢ, βᵥ, βᵣ, θ, pop_size] # params vector: [βᵢ, βᵥ, βᵣ, θ, N, A, t_peak]
-    params = [βᵢ_base, βᵢ_peak,
-            βᵥ_base, βᵥ_peak,
-            βᵣ_base, βᵣ_peak,
-            θ, pop_size]
+    ε_flu ~ truncated(Exponential(1.0), 0.1, 5.0)
+    ε_cov ~ truncated(Exponential(0.05), 0.0, 0.1)
+    ε_rsv ~ truncated(Exponential(3.0), 0.5, 10.0)
+    params = [βᵢ_base, βᵢ_peak, βᵥ_base, βᵥ_peak, βᵣ_base, βᵣ_peak, 
+        θ, popsize, ε_flu, ε_cov, ε_rsv,
+        t_school_flu, t_school_cov, t_school_rsv]
    
     # solve the ODE 
     prob = ODEProblem(sym_defn_ode, initial_cond, tspan, params)
     _sol = solve(prob, Tsit5(), saveat=1.0)
     sol = reduce(hcat, _sol.u)
-
-    #_sol = solve(prob, Rodas5P(), saveat=1.0, maxiters=1e6)
     # if _sol.retcode != ReturnCode.Success
     #     Turing.@addlogprob! -Inf
     #     return
@@ -352,12 +328,12 @@ end
     Iᵥ_sim = make_incidence(sol[14, :])
     Iᵣ_sim = make_incidence(sol[15, :])
 
-    Wᵢ_sim = sym_convolve_seir(Iᵢ_sim ./ pop_size, K_FLU) * M_f
-    Wᵥ_sim = sym_convolve_seir(Iᵥ_sim ./ pop_size, K_COV) * M_c
-    Wᵣ_sim = sym_convolve_seir(Iᵣ_sim ./ pop_size, K_RSV) * M_r
+    Wᵢ_sim = sym_convolve_seir(Iᵢ_sim ./ popsize, K_FLU) * M_f
+    Wᵥ_sim = sym_convolve_seir(Iᵥ_sim ./ popsize, K_COV) * M_c
+    Wᵣ_sim = sym_convolve_seir(Iᵣ_sim ./ popsize, K_RSV) * M_r
     
-    # number of periods to windin (meaning, do not compute likelyhood of flu/rsv WW for these weeks since WW signal is low and noisy, and we don't want to fit to noise in this period).
-    N_WINDIN = 9
+    lod_ww_flu = 1.0 # fix lod values
+    lod_ww_rsv = 1.0
 
     #likelyhood, but we'll have to go in weeks 
     for w in 1:weeks 
@@ -386,97 +362,78 @@ end
 
         # for flu and rsv, ignore the wind-in period 
         # this is because WW obs during this time is low 
-        if w > N_WINDIN
-            if !ismissing(obs_ww_flu[w])
-                if obs_ww_flu[w] <= lod_ww_flu   # at LOD: P(X <= LOD)
-                    Turing.@addlogprob! logcdf(LogNormal(log(mu_i), sigma_flu), lod_ww_flu)
-                    #Turing.@addlogprob! logpdf(LogNormal(log(mu_i), sigma_flu * 2.0), lod_ww_flu)
-                else
-                    obs_ww_flu[w] ~ LogNormal(log(mu_i), sigma_flu)
-                end
+        if w > n_windin_flu    
+            if obs_ww_flu[w] <= lod_ww_flu   # at LOD: P(X <= LOD)
+                Turing.@addlogprob! logcdf(LogNormal(log(mu_i), sigma_flu), lod_ww_flu)
+                #Turing.@addlogprob! logpdf(LogNormal(log(mu_i), sigma_flu * 2.0), lod_ww_flu)
+            else
+                obs_ww_flu[w] ~ LogNormal(log(mu_i), sigma_flu)
             end
-            if !ismissing(obs_ww_rsv[w]) 
-                if obs_ww_rsv[w] <= lod_ww_rsv   # at LOD: P(X <= LOD)
-                    Turing.@addlogprob! logcdf(LogNormal(log(mu_r),  sigma_rsv * 2.0), lod_ww_rsv)
-                    #Turing.@addlogprob! logpdf(LogNormal(log(mu_r), sigma_rsv * 2.0),  lod_ww_rsv)
-                else
-                    obs_ww_rsv[w] ~ LogNormal(log(mu_r),  sigma_rsv) 
-                end
+        end
+        if w > n_windin_rsv            
+            if obs_ww_rsv[w] <= lod_ww_rsv   # at LOD: P(X <= LOD)
+                Turing.@addlogprob! logcdf(LogNormal(log(mu_r),  sigma_rsv * 2.0), lod_ww_rsv)
+                #Turing.@addlogprob! logpdf(LogNormal(log(mu_r), sigma_rsv * 2.0),  lod_ww_rsv)
+            else
+                obs_ww_rsv[w] ~ LogNormal(log(mu_r),  sigma_rsv) 
             end
         end
     end
 end
 
-function run_inference() 
-    # get WW data 
-    province = "Ontario"
-    df = read_province(province) 
-    display(@gp)
+function run_inference(name) 
+    df, province_params = read_province(name) 
+
     obs_flu = df.flu_sg
     obs_covid = df.cov_sg
     obs_rsv = df.rsv_sg
+    observed_data = () 
     @assert length(df.flu_sg) == length(df.cov_sg) == length(df.rsv_sg)
     
-    lod_flu = minimum(obs_flu)
-    lod_rsv = minimum(obs_rsv)
-
-    # initial conditions and population size for the ODE model
-    N, immunity_flu, immunity_cov, immunity_rsv = province_params(province)
-    N = round(Int64, N * unique(df.populationcoverage)[1])
-    println("population of $province, adjusted: $N")
-
-    # step size that seems to work well: ϵ = 0.00625
-    _m1 = inference_model(obs_flu, obs_covid, obs_rsv, lod_flu, lod_rsv, N, immunity_flu, immunity_cov, immunity_rsv)
+    # for type stability: Turing.DynamicPPL.DebugUtils.model_warntype(_m1)    
+    _m1 = inference_model(obs_flu, obs_covid, obs_rsv, province_params)
     #return Turing.DynamicPPL.DebugUtils.model_warntype(_m1)    
-    # init_ϵ = 0.00625 works well
-    m1 = sample(_m1, NUTS(), MCMCThreads(), 1000, 4)  # 1000 samples, 4 chains for parallel sampling
-    println("m1 model finished (with non-zero theta), summary: ")
-    display(summarystats(m1))
-    
-    # _m0 = inference_model(obs_flu, obs_covid, obs_rsv, N, Iᵢ, Iᵥ, Iᵣ, true, true)
-    # m0 = sample(_m0, NUTS(init_ϵ = 0.00625), MCMCThreads(), 5000, 4)  # 1000 samples, 4 chains for parallel sampling
-    # println("m0 model finished (with zero theta), summary: ")
-    # display(summarystats(m0))
-
-    # return _m1, m1, _m0, m0
+    m1 = sample(_m1, NUTS(), MCMCThreads(), 1000, 4)
+    #println("finished inference")
     return _m1, m1
 end 
 
-function check_M_priors()
-    df = read_province("Ontario")
-    N, immunity_flu, immunity_cov, immunity_rsv = province_params("Ontario") # initial conditions for the ODE, based on province parameters.
-    N = round(Int64, N * unique(df.populationcoverage)[1]) # adjust the effective population
-    println("population of Ontario, adjusted: $N")
+## analysis functions 
+function calculate_reproduction_number(chain, immunity_flu, immunity_cov, immunity_rsv)
+    # R0_bio = β / γ
+    # R_eff = R0_bio * (1 - immunity)
+    # return R0_bio, R_eff
+     # calculating beta -> reproduction numbers (simple estimate) 
+    # extract posterior means for base and peak betas
+    βᵢ_base = mean(chain[:, :βᵢ_base, :])
+    βᵢ_peak = mean(chain[:, :βᵢ_peak, :])
+    βᵥ_base = mean(chain[:, :βᵥ_base, :])
+    βᵥ_peak = mean(chain[:, :βᵥ_peak, :])
+    βᵣ_base = mean(chain[:, :βᵣ_base, :])
+    βᵣ_peak = mean(chain[:, :βᵣ_peak, :])
 
-    
-    W_cov_peak = maximum(skipmissing(df.cov_sg))
-    W_flu_peak = maximum(skipmissing(df.flu_sg))
-    W_rsv_peak = maximum(skipmissing(df.rsv_sg))
-    
-    # rough peak prevalence assuming R_eff and SEIR dynamics
-    # peak_I/N ≈ S0/N × (1 - 1/Reff) × 0.3  (rough rule of thumb)
-    Reff_cov = 1.2; Reff_flu = 1.35; Reff_rsv = 1.5
-    peak_frac_cov = (1 - immunity_cov) * (1 - 1/Reff_cov) * 0.3
-    peak_frac_flu = (1 - immunity_flu) * (1 - 1/Reff_flu) * 0.3
-    peak_frac_rsv = (1 - immunity_rsv) * (1 - 1/Reff_rsv) * 0.3
-    
-    println("Implied log_M_c: $(round(log(W_cov_peak / peak_frac_cov), digits=2))")
-    println("Implied log_M_f: $(round(log(W_flu_peak / peak_frac_flu), digits=2))")
-    println("Implied log_M_r: $(round(log(W_rsv_peak / peak_frac_rsv), digits=2))")
+    γᵢ = 1/4.0
+    γᵥ = 1/5.0
+    γᵣ = 1/5.0 
+
+    # biological R0 = β / γ (in fully susceptible population)
+    # effective R = R0_bio × (1 - immunity) = β / γ × S(0)/N
+
+    println("=== Influenza ===")
+    println("  Pre-school:  R0_bio=$(round(βᵢ_base/γᵢ, digits=2)),  R_eff=$(round(βᵢ_base/γᵢ*(1-immunity_flu), digits=2))")
+    println("  Post-school: R0_bio=$(round(βᵢ_peak/γᵢ, digits=2)),  R_eff=$(round(βᵢ_peak/γᵢ*(1-immunity_flu), digits=2))")
+    println("  Expected R_eff range: pre < 1.0 (sub-threshold), post 1.5-2.5")
+
+    println("=== COVID ===")
+    println("  Pre-school:  R0_bio=$(round(βᵥ_base/γᵥ, digits=2)),  R_eff=$(round(βᵥ_base/γᵥ*(1-immunity_cov), digits=2))")
+    println("  Post-school: R0_bio=$(round(βᵥ_peak/γᵥ, digits=2)),  R_eff=$(round(βᵥ_peak/γᵥ*(1-immunity_cov), digits=2))")
+    println("  Expected R_eff range: pre ~1.0-1.2, post ~1.3-1.8")
+
+    println("=== RSV ===")
+    println("  Pre-school:  R0_bio=$(round(βᵣ_base/γᵣ, digits=2)),  R_eff=$(round(βᵣ_base/γᵣ*(1-immunity_rsv), digits=2))")
+    println("  Post-school: R0_bio=$(round(βᵣ_peak/γᵣ, digits=2)),  R_eff=$(round(βᵣ_peak/γᵣ*(1-immunity_rsv), digits=2))")
+    println("  Expected R_eff range: pre ~0.8-1.1, post ~1.5-2.0")
 end
-
-function plot_posterior_distribution(chain) 
-    param_names = chain.name_map.parameters
-    # [:βᵢ, :βᵥ, :β]
-    println(param_names)
-    x = vec(chain[:, :βᵣ, :])   # flatten all chains
-    kd = kde(x)
-    @gp "reset" 
-    @gp :- kd.x kd.density "w l lw 2 lc rgb 'blue'"
-    #@gp :- 1 
-    #@gp
-end
-
 
 function plot_predictive(chain)
     # performs the analysis of the posterior samples
@@ -484,33 +441,27 @@ function plot_predictive(chain)
     # as well as the inferred incidence and prevalence curves.
     
     # get the raw data 
-    df = read_province("Ontario")
+    df, province_params = read_province("Ontario")
+    # unpack the province parameters 
+    (; popsize,
+    immunity_flu, # pre-immunity levels
+    immunity_cov,
+    immunity_rsv, 
+    t_school_flu, # number of days for spike in flu/cov/rsv
+    t_school_cov,
+    t_school_rsv,
+    n_windin_flu, # number of days flu/cov/rsv < LOD
+    n_windin_cov,
+    n_windin_rsv) = province_params
+
     obs_flu = df.flu_sg
-    obs_covid = df.cov_sg
+    obs_cov = df.cov_sg
     obs_rsv = df.rsv_sg
+    
     weeks = length(obs_flu)
     days = weeks * 7 + 1
 
-    N, immunity_flu, immunity_cov, immunity_rsv = province_params("Ontario") # initial conditions for the ODE, based on province parameters.
-    N = round(Int64, N * unique(df.populationcoverage)[1]) # adjust the effective population
-    println("population of Ontario, adjusted: $N")
-
-    #print the stats of the Bayesian chains
-    display(summarystats(chain))    
-    
-    # calculate the beta <-> R0 relationship at the posterior mean 
-    # beta_i = mean(chain[:, :βᵢ, :])
-    # beta_v = mean(chain[:, :βᵥ, :])
-    # beta_r = mean(chain[:, :βᵣ, :])
-    # γᵢ = 1/4.0 # from the ODE defintions
-    # γᵥ = 1/5.0  
-    # γᵣ = 1/5.0
-    # println("R0, flu: $(round(beta_i / γᵢ; digits=2)), eff R: $(round(beta_i / γᵢ * (1 - immunity_flu); digits=2)), want range: 1.2 - 1.4")
-    # println("R0, COVID: $(round(beta_v / γᵥ; digits=2)), eff R: $(round(beta_v / γᵥ * (1 - immunity_cov); digits=2)), want range: 1.0 - 1.5")
-    # println("R0, RSV: $(round(beta_r / γᵣ; digits=2)), eff R: $(round(beta_r / γᵣ * (1 - immunity_rsv); digits=2)), want range: 1.5 - 2.0")
-
-    # plot the predictive distribution of the wastewater signal 
-    # based on the posterior samples of the parameters.
+    # run the ODE model based on posteriors
     nsamples = 1000 
     samples = get(sample(chain, nsamples); section=:parameters)
 
@@ -519,12 +470,12 @@ function plot_predictive(chain)
     ww_flu_mat = zeros(nsamples, weeks)
     ww_rsv_mat = zeros(nsamples, weeks)
 
-    # empty matrices to store incidence reuslts (in days)
+    # empty matrices to store incidence results (in days)
     inc_cov_mat = zeros(nsamples, weeks * 7 + 1) 
     inc_flu_mat = zeros(nsamples, weeks * 7 + 1)
     inc_rsv_mat = zeros(nsamples, weeks * 7 + 1)
 
-    # empty matrices to store prevalnece reuslts (in days)
+    # empty matrices to store prevalnece results (in days)
     prev_cov_mat = zeros(nsamples, weeks * 7 + 1) 
     prev_flu_mat = zeros(nsamples, weeks * 7 + 1)
     prev_rsv_mat = zeros(nsamples, weeks * 7 + 1)
@@ -532,67 +483,49 @@ function plot_predictive(chain)
     for i in 1:nsamples
         # extract the parameters for this sample
         θ = samples[:θ][i]
-        #βᵢ = samples[:βᵢ][i]
         βᵢ_base = samples[:βᵢ_base][i]
         βᵢ_peak = samples[:βᵢ_peak][i]
         βᵥ_base = samples[:βᵥ_base][i]
         βᵥ_peak = samples[:βᵥ_peak][i]
         βᵣ_base = samples[:βᵣ_base][i]
         βᵣ_peak = samples[:βᵣ_peak][i]
-
-        βᵥ = samples[:βᵥ][i] 
-        βᵣ = samples[:βᵣ][i]
+        ε_flu = samples[:ε_flu][i]
+        ε_cov = samples[:ε_cov][i]
+        ε_rsv = samples[:ε_rsv][i]
         M_c = exp(samples[:log_M_c][i])
         M_f = exp(samples[:log_M_f][i])
         M_r = exp(samples[:log_M_r][i])
         i0c = samples[:i0c][i] 
-        #i0r = samples[:i0r][i]
         i0r = 1
-        #i0i = samples[:i0i][i]
         i0i = 1
 
-        # susceptible 
-        s0i = (1.0 - immunity_flu) * N
-        s0c = (1.0 - immunity_cov) * N
-        s0r = (1.0 - immunity_rsv) * N
-        
-        # recovered compartments
-        r0i = immunity_flu * N
-        r0c = immunity_cov * N
-        r0r = immunity_rsv * N
-
+        # get initial conditions
+        s0i = (1.0 - immunity_flu) * popsize
+        s0c = (1.0 - immunity_cov) * popsize
+        s0r = (1.0 - immunity_rsv) * popsize
+        r0i = immunity_flu * popsize
+        r0c = immunity_cov * popsize
+        r0r = immunity_rsv * popsize
         u₀ = [
             s0i - i0i, i0i, 0.0, r0i,   # flu:   S E I R
             s0c - i0c, i0c, 0.0, r0c,   # covid: S E I R
             s0r - i0r, i0r, 0.0, r0r,   # rsv:   S E I R
             0.0, 0.0, 0.0               # incidence
         ]
-
-        #params = [βᵢ, βᵥ, βᵣ, θ, N]
-        params = [βᵢ_base, βᵢ_peak, βᵥ_base, βᵥ_peak, βᵣ_base, βᵣ_peak, θ, N]
-        
+        params = [βᵢ_base, βᵢ_peak, βᵥ_base, βᵥ_peak, βᵣ_base, βᵣ_peak, 
+            θ, popsize, ε_flu, ε_cov, ε_rsv, t_school_flu, t_school_cov, t_school_rsv]
         tspan  = (0.0, Float64(weeks * 7))
         prob   = ODEProblem(sym_defn_ode, u₀, tspan, params)
         sol    = solve(prob, Tsit5(), saveat=1.0)
-        sol_m  = reduce(hcat, sol.u)
-
-        # store prevalence results for this sample
-        prev_flu_mat[i, :] = sol_m[3, :]
-        prev_cov_mat[i, :] = sol_m[7, :]
-        prev_rsv_mat[i, :] = sol_m[11, :]
         
-        #store incidence
-        Iᵢ = make_incidence(sol_m[13, :])
-        Iᵥ = make_incidence(sol_m[14, :])
-        Iᵣ = make_incidence(sol_m[15, :])
-        inc_flu_mat[i, :] = Iᵢ
-        inc_cov_mat[i, :] = Iᵥ
-        inc_rsv_mat[i, :] = Iᵣ
-        #println(Iᵥ[1])
-
-        Wf = sym_convolve_seir(Iᵢ ./ N, K_FLU) * M_f
-        Wc = sym_convolve_seir(Iᵥ ./ N, K_COV) * M_c
-        Wr = sym_convolve_seir(Iᵣ ./ N, K_RSV) * M_r
+        Iᵢ = make_incidence(sol[13, :])
+        Iᵥ = make_incidence(sol[14, :])
+        Iᵣ = make_incidence(sol[15, :])
+        
+        
+        Wf = sym_convolve_seir(Iᵢ ./ popsize, K_FLU) * M_f
+        Wc = sym_convolve_seir(Iᵥ ./ popsize, K_COV) * M_c
+        Wr = sym_convolve_seir(Iᵣ ./ popsize, K_RSV) * M_r
 
         for w in 1:weeks
             idx_end = w * 7
@@ -601,39 +534,48 @@ function plot_predictive(chain)
             ww_flu_mat[i, w] = mean(Wf[idx_end-6:idx_end])
             ww_rsv_mat[i, w] = mean(Wr[idx_end-6:idx_end])
         end
+        
+        # store prevalence results for this sample
+        prev_flu_mat[i, :] = sol[3, :]
+        prev_cov_mat[i, :] = sol[7, :]
+        prev_rsv_mat[i, :] = sol[11, :]
+
+        #store incidence
+        inc_flu_mat[i, :] = Iᵢ
+        inc_cov_mat[i, :] = Iᵥ
+        inc_rsv_mat[i, :] = Iᵣ
     end
 
+    # print statistics
+    display(summarystats(chain))  # posteriors
+    calculate_reproduction_number(chain, immunity_flu, immunity_cov, immunity_rsv) # effective reproduction number 
+    
     # temporal suppression calculation
     _cov = vec(mean(prev_cov_mat, dims = 1))
     _flu = vec(mean(prev_flu_mat, dims = 1))
     _rsv = vec(mean(prev_rsv_mat, dims = 1))
     θ_mean = mean(samples[:θ])
-
-    supp_cov = [1 - exp(-θ_mean * (_flu[t] + _rsv[t])/N) for t in 1:days]
-    supp_rsv = [1 - exp(-θ_mean * (_flu[t] + _cov[t])/N) for t in 1:days]
-    supp_flu = [1 - exp(-θ_mean * (_cov[t] + _rsv[t])/N) for t in 1:days]
-
-    # suppression_cov = 1 - exp(-mean(samples[:θ]) * (peak_flu + peak_rsv)/N)
-    # suppression_rsv = 1 - exp(-mean(samples[:θ]) * (peak_flu + peak_cov)/N)
-    # suppression_flu = 1 - exp(-mean(samples[:θ]) * (peak_cov + peak_rsv)/N)
-    # println("Estimated COVID suppression due to cross-immunity: $(round(mean(suppression_cov) * 100, digits=1))%")
-    # println("Estimated RSV suppression due to cross-immunity: $(round(mean(suppression_rsv) * 100, digits=1))%")
-    # println("Estimated Flu suppression due to cross-immunity: $(round(mean(suppression_flu) * 100, digits=1))%")
+    supp_cov = [1 - exp(-θ_mean * (_flu[t] + _rsv[t])/popsize) for t in 1:days]
+    supp_rsv = [1 - exp(-θ_mean * (_flu[t] + _cov[t])/popsize) for t in 1:days]
+    supp_flu = [1 - exp(-θ_mean * (_cov[t] + _rsv[t])/popsize) for t in 1:days]
+    println("suppression at peak: 
+                flu: $(round(maximum(supp_flu), digits=2))
+                cov: $(round(maximum(supp_cov), digits=2))
+                rsv: $(round(maximum(supp_rsv), digits=2))")
     
     #final size:
-    println("final size flu: $(sum(vec(mean(inc_flu_mat, dims = 1))) )")
-    println("final size covid: $(sum(vec(mean(inc_cov_mat, dims = 1))) )")
-    println("final size rsv: $(sum(vec(mean(inc_rsv_mat, dims = 1))) )")
-
-    # peak predictions 
+    println("final size (in terms of percentage of eff population)
+                flu: $(round(sum(vec(mean(inc_flu_mat, dims = 1))) / popsize * 100, digits=1))%
+                covid: $(round(sum(vec(mean(inc_cov_mat, dims = 1))) / popsize * 100, digits=1))%
+                rsv: $(round(sum(vec(mean(inc_rsv_mat, dims = 1))) / popsize * 100, digits=1))%")
+    
+    # peak predictions (peak magnitude, peak timing)
     flu_model_peak_max, flu_model_peak_time = findmax(vec(mean(ww_flu_mat, dims = 1)))
     cov_model_peak_max, cov_model_peak_time = findmax(vec(mean(ww_cov_mat, dims = 1)))
     rsv_model_peak_max, rsv_model_peak_time = findmax(vec(mean(ww_rsv_mat, dims = 1)))
-    
     flu_sg_peak_max, flu_sg_peak_time = findmax(obs_flu) 
-    cov_sg_peak_max, cov_sg_peak_time = findmax(obs_covid)
+    cov_sg_peak_max, cov_sg_peak_time = findmax(obs_cov)
     rsv_sg_peak_max, rsv_sg_peak_time = findmax(obs_rsv)
-
     flu_orig_peak_max, flu_orig_peak_time = findmax(df.flu)
     cov_orig_peak_max, cov_orig_peak_time = findmax(df.covN2)
     rsv_orig_peak_max, rsv_orig_peak_time = findmax(df.rsv)
@@ -654,377 +596,135 @@ function plot_predictive(chain)
     ]
     display(pretty_table(mat, backend=:text, column_labels = ["Peak Values", "Model", "SG", "Raw"]))
 
-    # During wind-in, the SG filter smooths across weeks that are at LOD and
-    # weeks that are slightly above. This means some wind-in weeks get the full 
-    # LogNormal likelihood rather than the LOD penalty. 
-    # If the SG value at week 3 of wind-in is 0.02 gc/L (above lod_raw ≈ 0.008 gc/L), the likelihood evaluates obs ~ LogNormal(log(mu), sigma) — which forces mu to be near 0.02 rather than near-zero.
-    windin_above_lod = sum(df.flu_sg[1:9] .> minimum(df.flu))
-    println("Wind-in Flu weeks above raw LOD: $windin_above_lod / 9")
+    #print the WW vectors 
+    println("
+    flu vector: 
+        observed: $(round.(obs_flu, digits=2))
+        modelled: $(round.(vec(mean(ww_flu_mat, dims = 1)), digits=2))
+    ")
+    println("
+    cov vector: 
+        observed: $(round.(obs_cov, digits=2))
+        modelled: $(round.(vec(mean(ww_cov_mat, dims = 1)), digits=2))
+    ")
+    println("
+    rsv vector: 
+        observed: $(round.(obs_rsv, digits=2))
+        modelled: $(round.(vec(mean(ww_rsv_mat, dims = 1)), digits=2))
+    ")
+    
+    
+    # # find the peak week for each individual sample
+    # peak_weeks_rsv = [argmax(ww_rsv_mat[i, :]) for i in 1:nsamples]
+    # peak_weeks_flu = [argmax(ww_flu_mat[i, :]) for i in 1:nsamples]
 
-
-    # find the peak week for each individual sample
-    peak_weeks_rsv = [argmax(ww_rsv_mat[i, :]) for i in 1:nsamples]
-    peak_weeks_flu = [argmax(ww_flu_mat[i, :]) for i in 1:nsamples]
-
-    println("RSV peak week distribution:")
-    println("  Median: $(median(peak_weeks_rsv))")
-    println("  Mean:   $(round(mean(peak_weeks_rsv), digits=1))")
-    println("  Std:    $(round(std(peak_weeks_rsv), digits=1))")
-    println("  2.5%-97.5%: [$(quantile(peak_weeks_rsv, 0.025)), $(quantile(peak_weeks_rsv, 0.975))]")
-    println("  Observed: 29")
-
-
+    # println("RSV peak week distribution:")
+    # println("  Median: $(median(peak_weeks_rsv))")
+    # println("  Mean:   $(round(mean(peak_weeks_rsv), digits=1))")
+    # println("  Std:    $(round(std(peak_weeks_rsv), digits=1))")
+    # println("  2.5%-97.5%: [$(quantile(peak_weeks_rsv, 0.025)), $(quantile(peak_weeks_rsv, 0.975))]")
+    # println("  Observed: 29")
 
     #plot the posteriors and trace plots 
     @gp "reset"
     @gp :- "set multiplot layout 3, 1" :-
     @gp :- 1 1:weeks obs_flu "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
-    @gp :- 2 1:weeks obs_covid "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
+    @gp :- 2 1:weeks obs_cov "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
     @gp :- 3 1:weeks obs_rsv "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
     @gp :- 1 1:weeks vec(mean(ww_flu_mat, dims = 1)) "with lines title 'Pred Flu' lw 2 lc rgb 'blue'" :-
     @gp :- 2 1:weeks vec(mean(ww_cov_mat, dims = 1)) "with lines title 'Pred Covid' lw 2 lc rgb 'blue'" :-
     @gp :- 3 1:weeks vec(mean(ww_rsv_mat, dims = 1)) "with lines title 'Pred RSV' lw 2 lc rgb 'blue'" :-
-    Gnuplot.save("predictive_wastewater.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+    Gnuplot.save("outputs/predictive_wastewater.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
     display(@gp)
     
+
+    @gp "reset"
+    @gp :- "set multiplot layout 3, 1" :-
+    @gp :- 1 1:size(inc_flu_mat, 2) vec(mean(inc_flu_mat, dims = 1)) "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
+    @gp :- 2 1:size(inc_cov_mat, 2) vec(mean(inc_cov_mat, dims = 1)) "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
+    @gp :- 3 1:size(inc_rsv_mat, 2) vec(mean(inc_rsv_mat, dims = 1)) "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
+    Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+    display(@gp)
+
     @gp "reset"
     @gp :- "set multiplot layout 3, 1" :-
     @gp :- 1 1:size(inc_flu_mat, 2) cumsum(vec(mean(inc_flu_mat, dims = 1))) "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
     @gp :- 2 1:size(inc_cov_mat, 2) cumsum(vec(mean(inc_cov_mat, dims = 1))) "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
     @gp :- 3 1:size(inc_rsv_mat, 2) cumsum(vec(mean(inc_rsv_mat, dims = 1))) "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
-    Gnuplot.save("final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+    Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
     display(@gp)
 
     @gp "reset" 
     @gp :- 1:days supp_flu "with lines title 'Flu Suppression' lw 2 lc rgb 'red'" :-
     @gp :- 1:days supp_cov "with lines title 'Covid Suppression' lw 2 lc rgb 'blue'" :-
     @gp :- 1:days supp_rsv "with lines title 'RSV Suppression' lw 2 lc rgb 'green'" :-
-    Gnuplot.save("supressive_temporal.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+    Gnuplot.save("outputs/supressive_temporal.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
     display(@gp)
 
-    @gp "reset"
-    #@gp :- "set multiplot layout $numchains, 1" :-
-    @gp :-  chain[:, :θ, 1] "with lines title 'Chain 1' lc rgb 'blue'" :-
-    @gp :-  chain[:, :θ, 2] "with lines title 'Chain 2' lc rgb 'red'" :-
-    @gp :-  chain[:, :θ, 3] "with lines title 'Chain 3' lc rgb 'green'" :-
-    @gp :-  chain[:, :θ, 4] "with lines title 'Chain 4' lc rgb 'orange'" :-
-    @gp 
+    # @gp "reset"
+    # #@gp :- "set multiplot layout $numchains, 1" :-
+    # @gp :-  chain[:, :θ, 1] "with lines title 'Chain 1' lc rgb 'blue'" :-
+    # @gp :-  chain[:, :θ, 2] "with lines title 'Chain 2' lc rgb 'red'" :-
+    # @gp :-  chain[:, :θ, 3] "with lines title 'Chain 3' lc rgb 'green'" :-
+    # @gp :-  chain[:, :θ, 4] "with lines title 'Chain 4' lc rgb 'orange'" :-
+    # @gp 
 
     return nothing
 end
-########################################################################## 
-####### TEST MODEL  (basic SIR model with Bayesian parameter inference)
-########################################################################## 
 
-# run a test version of the model 
-# here we generate our own simulated WW from the ODE first 
-# and see if we can recover some parameters from the Turing model 
-# we use 10000 individuals - this is just to test if the model runs 
-# and can recover parameters close to the true value.
-# March 2nd test: works flawlessly, can recover parameters close to the true value.
-function basic_inference_model(test_theta = 0.0) 
-    # this function just runs the Turing model 
-    # but only fits up to observed incidence, not wastewater 
-    # it's just a test to see if the model even runs. 
+function solve_seir_model() 
+    _, province_params = read_province("Ontario")     
+    # unpack the province parameters 
+    (; popsize,
+    immunity_flu, # pre-immunity levels
+    immunity_cov,
+    immunity_rsv, 
+    t_school_flu, # number of days for spike in flu/cov/rsv
+    t_school_cov,
+    t_school_rsv,
+    n_windin_flu, # number of days flu/cov/rsv < LOD
+    n_windin_cov,
+    n_windin_rsv) = province_params
 
-    println("theta value: $test_theta")
-    # generate the simulated data from ODE 
-    # match the parameters in  sym_ode_model(), 
-    N = 10000  # test population
+    θ = 0.0
+    βᵢ_base = 0.35 
+    βᵢ_peak = 1.05 
+    βᵥ_base = 0.50 
+    βᵥ_peak = 0.87 
+    βᵣ_base = 0.50 
+    βᵣ_peak = 1.05 
+    ε_flu = 3.0
+    ε_cov = 0.0
+    ε_rsv = 3.0
     
-    # initial 
-    u₀ = [9999, 0, 10, 0,  # influenza
-          9999, 0, 10, 0,  # covid
-          9999, 0, 10, 0, # rsv
-          0, 0, 0]  # incidence compartments
-    tspan = (1, 364) 
-    # test parameters
-    tβᵢ = 0.28
-    tβᵥ = 0.22
-    tβᵣ = 0.18
-    tθ = test_theta  # for testing, generate data with no or some cross-immunity, and see if we can recover that.
-    params = [tβᵢ, tβᵥ, tβᵣ, tθ, N] 
+    i0c = 200 
+    i0i = 1.0
+    i0r = 1.0
 
-    #Pass to solvers
+    # susceptible 
+    s0i = (1.0 - immunity_flu) * popsize
+    s0c = (1.0 - immunity_cov) * popsize
+    s0r = (1.0 - immunity_rsv) * popsize
+    
+    # recovered compartments
+    r0i = immunity_flu * popsize
+    r0c = immunity_cov * popsize
+    r0r = immunity_rsv * popsize
+
+    u₀ = [
+        s0i - i0i, i0i, 0.0, r0i,   # flu:   S E I R
+        s0c - i0c, i0c, 0.0, r0c,   # covid: S E I R
+        s0r - i0r, i0r, 0.0, r0r,   # rsv:   S E I R
+        0.0, 0.0, 0.0               # incidence
+    ]
+    
+    params = [βᵢ_base, βᵢ_peak, βᵥ_base, βᵥ_peak, βᵣ_base, βᵣ_peak, 
+        θ, popsize, ε_flu, ε_cov, ε_rsv, t_school_flu, t_school_cov, t_school_rsv]
+    
+    tspan  = (0.0, 400.0)
     prob = ODEProblem(sym_defn_ode, u₀, tspan, params)
     sol = solve(prob, Tsit5(), saveat=1.0)
-
-    # get the incidence 
-    Iᵢ_sim = make_incidence(sol[13, :])
-    Iᵥ_sim = make_incidence(sol[14, :])
-    Iᵣ_sim = make_incidence(sol[15, :])
-
-    # scaling factors 
-    M_f = 2.1
-    M_c = 1.8
-    M_r = 1.3
-
-    # convert to wastewater signal using convolution with the kernels 
-    # Do not convert to weekly data right now - 
-    # -> it kills the biological resolution of the shedding kernel.
-    #  For example, SARS-CoV-2 shedding peaks around day 4 or 5 after infection;
-    #  if you aggregate into weeks first, the math cannot accurately apply that daily shedding delay.
-    _Wᵢ_sim = sym_convolve_seir(Iᵢ_sim, K_FLU)
-    _Wᵥ_sim = sym_convolve_seir(Iᵥ_sim, K_COV)
-    _Wᵣ_sim = sym_convolve_seir(Iᵣ_sim, K_RSV)
-
-    # convert to a weekly signal by taking the mean of each 7 days, 
-    # and add some noise to simulate observed data. 
-    Wᵢ_sim = mean.(eachcol(reshape(_Wᵢ_sim, 7, :))) * M_f
-    Wᵥ_sim = mean.(eachcol(reshape(_Wᵥ_sim, 7, :))) * M_c
-    Wᵣ_sim = mean.(eachcol(reshape(_Wᵣ_sim, 7, :))) * M_r
-
-    println("lengths of vectors: 
-        length of ODE incidence: $(length(Iᵢ_sim))
-        length of ODE simulated WW: $(length(Wᵢ_sim))
-        length of weekly converted 'observed' WW: $(length(Wᵢ_sim))
-    ")
-
-    # add noise to the WW signal 
-    sigma_test = 0.3   # pick a plausible observation noise
-    obs_flu  = rand.(LogNormal.(log.(Wᵢ_sim .+ 1e-6), sigma_test))
-    obs_covid = rand.(LogNormal.(log.(Wᵥ_sim .+ 1e-6), sigma_test))
-    obs_rsv  = rand.(LogNormal.(log.(Wᵣ_sim .+ 1e-6), sigma_test))
-
-    # obs_flu = Float64.(rand.(Poisson.(Wᵢ_sim)))
-    # obs_covid = Float64.(rand.(Poisson.(Wᵥ_sim)))
-    # obs_rsv =  Float64.(rand.(Poisson.(Wᵣ_sim)))
     
-    #return obs_rsv
-    ## plot these with incidence curves to see if they look reasonable 
-    
-    @gp "reset"
-    #@gp :- "set multiplot layout 2, 3" :- 
-    @gp :- sol.t Iᵢ_sim "with lines title 'Incidence (flu)' lc rgb 'orange' lt 2 dt 2 lw 2" :-
-    @gp :- sol.t[1:7:end] obs_flu "with lines title 'Obs WW (flu)' lc rgb 'orange' lt 2 dt 2 lw 2" :-
-    @gp :- sol.t Iᵥ_sim "with lines title 'Incidence (covid)' lc rgb 'purple' lw 2" :-
-    @gp :- sol.t[1:7:end] obs_covid "with lines title 'Obs WW (covid)' lc rgb 'purple' lt 2 dt 2 lw 2" :-
-    @gp :- sol.t Iᵣ_sim "with lines title 'Incidence (rsv)' lc rgb 'blue' lw 2" :-
-    @gp :- sol.t[1:7:end] obs_rsv "with lines title 'Obs WW (rsv)' lc rgb 'blue' lt 2 dt 2 lw 2" :-
-    println("plot set, call using @gp in terminal to display.") 
-    
-    # run 
-    my_model = inference_model(obs_flu, obs_covid, obs_rsv, N, 10, 10, 10, false)
-    println("Starting MCMC Sampling...")
-    chain = sample(my_model, NUTS(), 1000)
-    return chain
-end
-
-
-# run ode model with some fixed parameters to see the dynamics 
-function simple_ode_model(θ = 0.0) 
-    N = 10000  # test population
-    u₀ = [9999, 0, 10, 0,  # influenza
-          9999, 0, 10, 0,  # covid
-          9999, 0, 10, 0, # rsv
-          0, 0, 0]  # incidence compartments
-    tspan = (0.0, 365) 
-    # these parameters are just for testing, not based on literature.
-    # they make all three virus have positive incidence rate 
-    # which allows for testing theta
-    params = [0.28, 0.22, 0.18, θ, N] 
-    #Pass to solvers
-    prob = ODEProblem(sym_defn_ode, u₀, tspan, params)
-    _sol = solve(prob, Tsit5())
-    sol = reduce(hcat, _sol.u)
-
-    #plot 
-    println("plot set")
-    @gp "reset" 
-    @gp :- "set multiplot layout 2, 3" :- # 1 row, 3 columns
-    @gp :- 1 _sol.t sol[1, :] "with lines title 'S' lc rgb 'black'" :-
-    @gp :- 1 _sol.t sol[2, :] "with lines title 'E' lc rgb 'blue'" :-
-    @gp :- 1 _sol.t sol[3, :] "with lines title 'I' lc rgb 'red'" :-
-    @gp :- 1 _sol.t sol[4, :] "with lines title 'R' lc rgb 'green'" :-
-
-    @gp :- 2 _sol.t sol[5, :] "with lines title 'S' lc rgb 'black'" :-
-    @gp :- 2 _sol.t sol[6, :] "with lines title 'E' lc rgb 'blue'" :-
-    @gp :- 2 _sol.t sol[7, :] "with lines title 'I' lc rgb 'red'" :-
-    @gp :- 2 _sol.t sol[8, :] "with lines title 'R' lc rgb 'green'" :-
-
-    @gp :- 3 _sol.t sol[9, :] "with lines title 'S' lc rgb 'black'" :-
-    @gp :- 3 _sol.t sol[10, :] "with lines title 'E' lc rgb 'blue'" :-
-    @gp :- 3 _sol.t sol[11, :] "with lines title 'I' lc rgb 'red'" :-
-    @gp :- 3 _sol.t sol[12, :] "with lines title 'R' lc rgb 'green'" :-
-
-    @gp :- 4 _sol.t make_incidence(sol[13, :]) "with lines title 'Incidence (flu)' lc rgb 'orange' lw 2" :-
-    @gp :- 4 _sol.t make_incidence(sol[14, :]) "with lines title 'Incidence (covid)' lc rgb 'purple' lw 2" :-
-    @gp :- 4 _sol.t make_incidence(sol[15, :]) "with lines title 'Incidence (rsv)' lc rgb 'brown' lw 2" :-
-    # @gp  $ call @gp in terminal to display the plot.
-    return sol
-end
-
-# the following are to just test a simple SIR model
-# used to test the proof of concept of runing a Bayesian ODE model.
-function tst_defn_ode_sys(du, u, p, t) 
-    S, I = u     # Unpack state variables
-    beta = p[1]  # Unpack our single parameter
-    du[1] = -beta * S * I  # dS/dt: Susceptible people getting infected
-    du[2] =  beta * S * I  # dI/dt: New infections added to the pool
-end
-
-function tst_run_ode_sys(beta) 
-    # just run the basic ODE model
-    u0 = [99.0, 1.0] 
-    tspan = (0.0, 100.0) 
-    p = [beta]
-    prob = ODEProblem(tst_defn_ode_sys, u0, tspan, p)  # Define the ODE problem
-    _sol = solve(prob, Tsit5(), saveat=1.0) # The sampler guesses a beta, runs the ODE, and saves the daily results
-    sol = reduce(hcat, _sol.u)  # Convert solution to a matrix for plotting
-    I_sim = sol[2, :]
-    @gp "reset" 
-    @gp :- _sol.t sol[2, :] "with lines notitle lc rgb 'blue'" :-
-    println("plot set")
-    return _sol
-end
-
-# turing model 
-@model function tst_defn_turing_model(data, u0, tspan)
-    # Bayesian inference 
-    # Calling sample(syn_turing, NUTS(), 1000) does the following
-    # The algorithm looks at the line beta ~ LogNormal(log(0.1), 1.0). 
-    # It picks a random number from this distribution—let's say it guesses $\beta = 0.08$.
-    # It plugs $\beta = 0.08$ into the ODEProblem and runs it. 
-    # Because 0.08 is higher than the true value of 0.05,
-    # the simulation will produce a curve where everyone gets infected way too fast. It might predict that on Day 5, there are 80 infected people.
-    # The likelihood: It reaches the for i in 1:length(data) loop. It looks at your obs_data for Day 5. Let's say your data shows only 15 people were infected on Day 5.
-    # The algorithm calculates: "What is the probability of observing 15 from a Poisson distribution that expects 80?"
-    # That probability is practically zero. The Turing engine assigns a terrible "Likelihood Score" to $\beta = 0.08$.
-
-    # NUTS algorithm: Because the score was terrible, the algorithm uses 
-    # calculus (Automatic Differentiation) to figure out which direction 
-    # to adjust $\beta$. It realizes it needs to lower the number. 
-    # Next time, it might guess $\beta = 0.06$. It gets a better score. 
-    # Then it tries $\beta = 0.05$, gets an excellent score, and starts 
-    # taking lots of samples around that area.
-
-    # When the script finishes, it will print a table of statistics. Look for the mean of beta in the output.
-    # Because true_beta was exactly 0.05, the MCMC sampler's mean should
-    # settle extremely close to ~0.049 to 0.051. The std (standard deviation) will tell you how confident the model is in that guess.
-
-    # sometimes the test model fails (since beta is LogNormal)
-    # ```
-    # sampled dual b: 0.06919122724261408
-    # sampled dual b: 0.0040338384347376665
-    # ┌ Warning: Verbosity toggle: max_iters
-    # │  Interrupted. Larger maxiters is needed. If you are using an integrator for non-stiff ODEs or an automatic switching algorithm (the default), you may want to consider using a method for stiff equations. See the solver pages for more details (e.g. https://docs.sciml.ai/DiffEqDocs/stable/solvers/ode_solve/#Stiff-Problems).
-    # └ @ SciMLBase ~/.julia/packages/SciMLBase/obTYa/src/integrator_interface.jl:635
-    # sampled dual b: 1338.1957620169487
-    # ```
-
-    # specify the prior for beta
-    #beta ~ Truncated(LogNormal(log(0.1), 1.0), 0.0, 1.0)
-    beta ~ Truncated(Gamma(2, 2), 0.0, 1.0)
-
-    p = [beta]
-    prob = ODEProblem(tst_defn_ode_sys, u0, tspan, p)  # Define the ODE problem
-    _sol = solve(prob, Tsit5(), saveat=1.0) # The sampler guesses a beta, runs the ODE, and saves the daily results
-    sol = reduce(hcat, _sol.u)  # Convert solution to a matrix for plotting
-    I_sim = sol[2, :]
-   
-    # just a print statement since it was failing 
-    # if (beta isa Turing.ForwardDiff.Dual)
-    #     println("sampled dual b: $(beta.value)")
-    # end
-    
-    # this doesn't work because beta is a Dual number, which is a special type used for automatic differentiation.
-    # println("sampled b: $beta")
-    # println("typeof: $(beta isa Turing.ForwardDiff.Dual)")
-    # #push!(betas, beta)
-    
-    # Extract the simulated Infected curve based on the current guess for beta
-    # We compare the simulated curve to our noisy observed data
-    for i in eachindex(data)
-        # We add 1e-6 to prevent mathematically impossible Poisson(0) errors
-        data[i] ~ Poisson(I_sim[i] + 1e-6) 
-    end
-end
-
-function tst_run_bayesian_model() 
-    # runs the ODE model directly with fixed parameters 
-    # then adds noise to the simulated data and 
-    # and tries to recover the parameters using Turing.
-    u0 = [99.0, 1.0] 
-    tspan = (0.0, 100.0) # Run for 20 days
-    p = [0.001]  # beta rate parameter
-    prob = ODEProblem(tst_defn_ode_sys, u0, tspan, p)  # Define the ODE problem
-    _sol = solve(prob, Tsit5(), saveat=1.0)  # Solve the ODE using the Ts
-    sol = reduce(hcat, _sol.u)  # Convert solution to a matrix for plotting
-    @gp "reset"
-    @gp :- _sol.t sol[1, :] "with lines notitle lc rgb 'blue'" :-
-    @gp :- _sol.t sol[2, :] "with lines notitle lc rgb 'red'" :- 
-    
-    # add noise to the data to see if we can recover it / plot it
-    true_data = sol[2, :] # 
-    #obs_data = rand.(Poisson.(true_data))
-    obs_data = round.(Int64, rand.(Exponential.(true_data)))
-    #obs_data = rand.(NegativeBinomial.(true_data, 0.4))
-    @gp :- _sol.t obs_data "with lines  notitle lc rgb 'black'" :-
-    @gp
-    #return obs_data
-    #return 
-    # can we recover beta using Turing?
-    my_model = tst_defn_turing_model(obs_data, u0, tspan)
-    println("Starting MCMC Sampling...")
-    chain = sample(my_model, NUTS(), 1000)
-    display(describe(chain))
-    return chain
-end
-    
-########################################################################## 
-#### A basic SEIR MODEL I used to test the idea of calculating incidence from the ODE 
-#### basically needs another compartment in the ODE defn
-########################################################################## 
-
-function inc_defn_ode(du, u, p, t)
-    # definitions of SEIR models for each covid, flu, rsv virus 
-    # parameters are p = [βᵢ, βᵥ, βᵣ, θ, N] for now (update as needed).
-    # the theta is the cross-immunity factor, and N is the total population. 
-
-    σᵣ = 1/4.0
-    γᵣ = 1/7.0
-    Sᵣ, Eᵣ, Iᵣ, Rᵣ = u
-
-    # unpack the parameters, fourth one is theta. 
-    βᵣ, N = p
-    λᵣ = βᵣ * (Iᵣ / N)
-    du[1] = -λᵣ * Sᵣ
-    du[2] = λᵣ * Sᵣ - σᵣ * Eᵣ
-    du[3] = σᵣ * Eᵣ - γᵣ * Iᵣ
-    du[4] = γᵣ * Iᵣ
-    du[5] = σᵣ * Eᵣ  # compartment to just hold the incidence (cumulative), so you'll have to take difference
-    return nothing
-end
-
-function inc_run_ode() 
-    u₀ = [9999, 0, 1, 0, 0] # rsv
-    tspan = (0.0, 100)
-    params = [0.5, 10000]
-    #Pass to solvers
-    prob = ODEProblem(inc_defn_ode, u₀, tspan, params)
-    _sol = solve(prob, Tsit5())
-    sol = reduce(hcat, _sol.u)
-
-    gem_incidence = sol[2, :] * 1/4.0 # suggested from AI, but not correctֱ
-    com_incidence = sol[5, :] # proper incidence calculated in the ODE (but it's cumulative, so we need to take the difference)
-    incidence_2 = make_incidence(com_incidence) # 
-    #plot 
-    println("plot set")
-    @gp "reset" 
-    @gp :- "set multiplot layout 1, 1" :- # 1 row, 3 columns
-    @gp :- 1 _sol.t sol[1, :] "with lines title 'S' lc rgb 'black'" :-
-    @gp :- 1 _sol.t sol[2, :] "with lines title 'E' lc rgb 'blue'" :-
-    @gp :- 1 _sol.t sol[3, :] "with lines title 'I' lc rgb 'red'" :-
-    @gp :- 1 _sol.t sol[4, :] "with lines title 'R' lc rgb 'green'" :-
-
-    @gp :- 1 _sol.t gem_incidence "with lines title 'Incidence (gem)' lc rgb 'orange' lw 2" :-
-    @gp :- 1 _sol.t com_incidence "with lines title 'Incidence (cumulative)' lc rgb 'purple' lw 2" :-
-    @gp :- 1 _sol.t incidence_2 "with lines title 'Incidence_2 (diff)' lc rgb 'brown' lw 2" :-
-
-    println("sum: gem incidence: $(sum(gem_incidence))")
-    println("sum: compartment incidence_2: $(sum(incidence_2))")
-    println("sum: final cumulative (should be same as above): $(sol[5, end])")
-    println("recovered population, should roughly match final cumulative: $(sol[4, end])")
-    println("I + E population (+ recovered should be incidence): $(sol[2, end] + sol[3, end])")
-    return _sol
+    iflu = make_incidence(sol.u[14])
+    return iflu
 end
