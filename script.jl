@@ -33,7 +33,7 @@ function make_incidence(X)
     y[1] = y[2]
     return y
 end
-apply_sg(vec) = savitzky_golay(vec, 5, 2).y
+apply_sg(vec) = savitzky_golay(vec, 7, 1).y
 logistic(x) = 1.0 / (1.0 + exp(-x))
 
 function read_province(name) 
@@ -46,6 +46,7 @@ function read_province(name)
     !haskey(data, _tomlname) && error("Province '$(_tomlname)' not found")
     params_obj = from_dict(ProvinceParams, data[_tomlname]) # convert Configurations struct
 
+    # data from: https://health-infobase.canada.ca/wastewater/#download
     df = DataFrame(CSV.File("canada_wastewater.csv"))
     # clean up a little 
     df = @chain df begin
@@ -74,6 +75,7 @@ function read_province(name)
     @gp :- 3 1:nrow(df) df.rsv_sg "with lines title 'rsv_sg' lc rgb 'blue'" :- 
     println("plot set, call using @gp in terminal to display.") 
 
+    println("adjusted pop size: $(params_obj.popsize)")
     # print LOD week starts. We are assuming LOD < 1 is no signal. 
     # WW data is in weeks, so convert to days.
     lod_week_start_flu = find_emergence_week(df.flu_sg, 1.0) 
@@ -85,6 +87,13 @@ function read_province(name)
     rsv: $lod_week_start_rsv (in days: $(lod_week_start_rsv * 7 - 6))
         Use information to set the correct wind-in period in province parameters")
 
+    println("SG data: 
+    flu: $(round.(df.flu_sg, digits=2)),
+
+    covid: $(round.(df.cov_sg, digits=2)),
+
+    rsv: $(round.(df.rsv_sg, digits=2)))")
+
     return df::DataFrame, params_obj
 end
 
@@ -93,33 +102,43 @@ function hyperparameters(name)
 
     @match name begin
     "Ontario" => (
-        βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
-        βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
-        βᵥ_base = truncated(Normal(0.50, 0.10), 0.30, 0.75),
-        βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
-        βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
-        βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
-        i0c = truncated(Normal(200.0, 500.0), 10.0, params.popsize * 0.05)
+    βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
+    βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
+    βᵥ_base = truncated(Normal(0.50, 0.10), 0.30, 0.75),
+    βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
+    βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
+    βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
+    i0c = truncated(Normal(200.0, 500.0), 10.0, params.popsize * 0.05)
     )
     "British Columbia" => (
-        βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
-        βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
-        #βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),
-        #βᵥ_peak = truncated(Normal(0.45, 0.08), 0.25, 0.62),
-        βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),   # sub-threshold summer
-        βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),   # above-threshold winter
-        βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
-        βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
-        i0c = truncated(Normal(5000.0, 2000.0), 100.0, params.popsize * 0.10)  #BC
+    βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
+    βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
+    #βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),
+    #βᵥ_peak = truncated(Normal(0.45, 0.08), 0.25, 0.62),
+    βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),   # sub-threshold summer
+    βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),   # above-threshold winter
+    βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
+    βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
+    #i0c = truncated(Normal(5000.0, 2000.0), 100.0, params.popsize * 0.10)  #BC
+    i0c = truncated(Normal(4000.0, 800.0), 500.0, params.popsize * 0.10)
     )
     "Alberta" => (
-        βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
-        βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
-        βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),  # sub-threshold, same as BC
-        βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
-        βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
-        βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
-        i0c = truncated(Normal(15000.0, 3000.0), 1000.0, params.popsize * 0.15)
+    βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
+    βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),        
+    βᵥ_base = truncated(Normal(0.65, 0.05), 0.55, 0.75),   # above threshold — COVID growing
+    βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),   # winter amplification
+    βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
+    βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
+    i0c = truncated(Normal(300.0, 150.0), 50.0, 2000.0)
+    )
+    "Manitoba" => (
+    βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
+    βᵢ_peak = truncated(Normal(1.05, 0.15), 0.65, 1.50),
+    βᵥ_base = truncated(Normal(0.68, 0.05), 0.58, 0.78),   # above threshold — COVID growing
+    βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
+    βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
+    βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
+    i0c     = truncated(Normal(800.0, 200.0), 100.0, params.popsize * 0.10)
     )
     _ => error("Province '$name' not found")
     end
@@ -464,13 +483,13 @@ function calculate_reproduction_number(chain, immunity_flu, immunity_cov, immuni
     println("  Expected R_eff range: pre ~0.8-1.1, post ~1.5-2.0")
 end
 
-function plot_predictive(chain)
+function plot_predictive(chain, name)
     # performs the analysis of the posterior samples
     # and plots the predictive distribution of the wastewater signal,
     # as well as the inferred incidence and prevalence curves.
     
     # get the raw data 
-    df, province_params = read_province("British Columbia")
+    df, province_params = read_province(name)
     # unpack the province parameters 
     (; popsize,
     immunity_flu, # pre-immunity levels
@@ -487,6 +506,9 @@ function plot_predictive(chain)
     obs_flu = df.flu_sg
     obs_cov = df.cov_sg
     obs_rsv = df.rsv_sg
+    obs_flu_raw = df.flu
+    obs_cov_raw = df.covN2
+    obs_rsv_raw = df.rsv
     
     weeks = length(obs_flu)
     days = weeks * 7 + 1
@@ -664,6 +686,10 @@ function plot_predictive(chain)
     @gp :- 1 1:weeks vec(mean(ww_flu_mat, dims = 1)) "with lines title 'Pred Flu' lw 2 lc rgb 'blue'" :-
     @gp :- 2 1:weeks vec(mean(ww_cov_mat, dims = 1)) "with lines title 'Pred Covid' lw 2 lc rgb 'blue'" :-
     @gp :- 3 1:weeks vec(mean(ww_rsv_mat, dims = 1)) "with lines title 'Pred RSV' lw 2 lc rgb 'blue'" :-
+    @gp :- 1 1:weeks obs_flu_raw "with lines title 'Obs Flu Raw' lw 2 lc rgb 'red'" :-
+    @gp :- 2 1:weeks obs_cov_raw "with lines title 'Obs Covid Raw' lw 2 lc rgb 'red'" :-
+    @gp :- 3 1:weeks obs_rsv_raw "with lines title 'Obs RSV Raw' lw 2 lc rgb 'red'" :-
+
     Gnuplot.save("outputs/predictive_wastewater.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
     display(@gp)
     
