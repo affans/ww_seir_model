@@ -5,7 +5,7 @@ using DifferentialEquations
 using Turing, LogDensityProblems
 using MCMCChains, KernelDensity
 using SavitzkyGolay # filter
-using Gnuplot, PrettyTables, TerminalPager
+using Gnuplot, PrettyTables, TerminalPager, Match
 using Dates, Parameters, Configurations, TOML, GarishPrint
 Gnuplot.options.term = "sixelgd truecolor enhanced size 1000,400 scroll font arial 10"
 # when adding new packages, avoid precompilation by
@@ -42,9 +42,9 @@ function read_province(name)
     println("getting data for province: $name")
      # Parse the whole file into a nested dictionary
     data = TOML.parsefile("parameters.toml")
-    !haskey(data, name) && error("Province '$name' not found")
-    
-    params_obj = from_dict(ProvinceParams, data[name]) # convert Configurations struct
+    _tomlname = replace(name, " " => "-")
+    !haskey(data, _tomlname) && error("Province '$(_tomlname)' not found")
+    params_obj = from_dict(ProvinceParams, data[_tomlname]) # convert Configurations struct
 
     df = DataFrame(CSV.File("canada_wastewater.csv"))
     # clean up a little 
@@ -74,22 +74,56 @@ function read_province(name)
     @gp :- 3 1:nrow(df) df.rsv_sg "with lines title 'rsv_sg' lc rgb 'blue'" :- 
     println("plot set, call using @gp in terminal to display.") 
 
-
     # print LOD week starts. We are assuming LOD < 1 is no signal. 
     # WW data is in weeks, so convert to days.
-    lod_week_start_flu = find_emergence_week(df.flu_sg, 1.0) * 7 - 6 
-    lod_week_start_cov = find_emergence_week(df.cov_sg, 1.0) * 7 - 6
-    lod_week_start_rsv = find_emergence_week(df.rsv_sg, 1.0) * 7 - 6
+    lod_week_start_flu = find_emergence_week(df.flu_sg, 1.0) 
+    lod_week_start_cov = find_emergence_week(df.cov_sg, 1.0)
+    lod_week_start_rsv = find_emergence_week(df.rsv_sg, 1.0)
     println("LOD week start (threshold: 1.0): 
-              flu: $lod_week_start_flu, 
-              covid: $lod_week_start_cov, 
-              rsv: $lod_week_start_rsv
-              
-            Use information to set the correct wind-in period in province parameters")
+    flu: $lod_week_start_flu (in days: $(lod_week_start_flu * 7 - 6)), 
+    covid: $lod_week_start_cov (in days: $(lod_week_start_cov * 7 - 6)), 
+    rsv: $lod_week_start_rsv (in days: $(lod_week_start_rsv * 7 - 6))
+        Use information to set the correct wind-in period in province parameters")
 
     return df::DataFrame, params_obj
 end
 
+function hyperparameters(name)
+    _, params = read_province(name) 
+
+    @match name begin
+    "Ontario" => (
+        βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
+        βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
+        βᵥ_base = truncated(Normal(0.50, 0.10), 0.30, 0.75),
+        βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
+        βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
+        βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
+        i0c = truncated(Normal(200.0, 500.0), 10.0, params.popsize * 0.05)
+    )
+    "British Columbia" => (
+        βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
+        βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
+        #βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),
+        #βᵥ_peak = truncated(Normal(0.45, 0.08), 0.25, 0.62),
+        βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),   # sub-threshold summer
+        βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),   # above-threshold winter
+        βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
+        βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
+        i0c = truncated(Normal(5000.0, 2000.0), 100.0, params.popsize * 0.10)  #BC
+    )
+    "Alberta" => (
+        βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
+        βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
+        βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),  # sub-threshold, same as BC
+        βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
+        βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
+        βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
+        i0c = truncated(Normal(15000.0, 3000.0), 1000.0, params.popsize * 0.15)
+    )
+    _ => error("Province '$name' not found")
+    end
+end
 
 function find_emergence_week(signal, threshold=1.0)
     # find first week where signal exceeds threshold for 2+ consecutive weeks
@@ -219,7 +253,8 @@ function sym_convolve_seir(incidence, kernel)
 end
 
 # set up a Turing model 
-@model function inference_model(obs_ww_flu, obs_ww_cov, obs_ww_rsv, province_params)
+@model function inference_model(obs_ww_flu, obs_ww_cov, obs_ww_rsv, hyperparams, province_params)
+    
     # unpack the province parameters 
     (; popsize,
     immunity_flu, # pre-immunity levels
@@ -260,28 +295,21 @@ end
     # falling back to finite differences or throwing errors. 
     # The sampler becomes orders of magnitude slower.
 
-    # setup the ODE for running 
-    #βᵢ ~ truncated(LogNormal(log(0.82), 0.15), 0.35, 1.3)
-    #βᵥ ~ truncated(LogNormal(log(0.87), 0.2), 0.40, 1.5)
-    #βᵣ ~ truncated(LogNormal(log(0.67), 0.15), 0.40, 1.0)
-
     # base beta: pre-school, must be low enough to explain near-zero early flu
     # R_eff_base = βᵢ_base × 0.57 / 0.25 — want R_eff < 1 during COVID suppression
     # peak beta: post-school, must be high enough for 96x rise
-    # R_eff_peak = βᵢ_peak × 0.57 / 0.25 — want R_eff ~2-3
-    
-    βᵢ_base ~ truncated(Normal(0.35, 0.10), 0.15, 0.42)
-    βᵢ_peak ~ truncated(Normal(1.05, 0.15), 0.50, 1.50)
-    βᵥ_base ~ truncated(Normal(0.50, 0.10), 0.30, 0.75)
-    βᵥ_peak ~ truncated(Normal(0.87, 0.12), 0.60, 1.30)
-    βᵣ_base ~ truncated(Normal(0.50, 0.10), 0.25, 0.72)
-    βᵣ_peak ~ truncated(Normal(1.05, 0.12), 0.55, 1.10)
-   
+    # R_eff_peak = βᵢ_peak × 0.57 / 0.25 — want R_eff ~2-3    
+    βᵢ_base ~ hyperparams.βᵢ_base
+    βᵢ_peak ~ hyperparams.βᵢ_peak
+    βᵥ_base ~ hyperparams.βᵥ_base
+    βᵥ_peak ~ hyperparams.βᵥ_peak
+    βᵣ_base ~ hyperparams.βᵣ_base
+    βᵣ_peak ~ hyperparams.βᵣ_peak
+
     # initial values 
-    #i0c ~ truncated(Normal(500.0, 300.0), 1.0, pop_size * 0.05) # reigna
-    #i0i ~ truncated(Normal(10.0, 20.0), 1.0, 200) # 
-    #i0r ~ truncated(Normal(5.0, 10.0), 1.0, 200) 
-    i0c ~ truncated(Normal(200.0, 500.0), 10.0, popsize * 0.05)
+    #i0c ~ truncated(Normal(200.0, 500.0), 10.0, popsize * 0.05) #ontario
+    #i0c ~ truncated(Normal(5000.0, 2000.0), 100.0, popsize * 0.10)  #BC
+    i0c ~ hyperparams.i0c
     i0i = 1.0
     i0r = 1.0
 
@@ -387,11 +415,12 @@ function run_inference(name)
     obs_flu = df.flu_sg
     obs_covid = df.cov_sg
     obs_rsv = df.rsv_sg
-    observed_data = () 
     @assert length(df.flu_sg) == length(df.cov_sg) == length(df.rsv_sg)
-    
+
+    hp = hyperparameters(name)
+
     # for type stability: Turing.DynamicPPL.DebugUtils.model_warntype(_m1)    
-    _m1 = inference_model(obs_flu, obs_covid, obs_rsv, province_params)
+    _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params)
     #return Turing.DynamicPPL.DebugUtils.model_warntype(_m1)    
     m1 = sample(_m1, NUTS(), MCMCThreads(), 1000, 4)
     #println("finished inference")
@@ -441,7 +470,7 @@ function plot_predictive(chain)
     # as well as the inferred incidence and prevalence curves.
     
     # get the raw data 
-    df, province_params = read_province("Ontario")
+    df, province_params = read_province("British Columbia")
     # unpack the province parameters 
     (; popsize,
     immunity_flu, # pre-immunity levels
@@ -453,6 +482,7 @@ function plot_predictive(chain)
     n_windin_flu, # number of days flu/cov/rsv < LOD
     n_windin_cov,
     n_windin_rsv) = province_params
+    display(province_params)
 
     obs_flu = df.flu_sg
     obs_cov = df.cov_sg

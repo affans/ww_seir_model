@@ -1,6 +1,8 @@
+# population can be found at https://www150.statcan.gc.ca/t1/tbl1/en/tv.action?pid=1710000901
+
 [Ontario]
 popsize = 3712878 # adjust from 15000000 
-immunity_flu = 0.43
+immunity_flu = 0.45
 immunity_cov = 0.70
 immunity_rsv = 0.55
 t_school_flu = 113.0
@@ -8,31 +10,31 @@ t_school_rsv = 94.0
 t_school_cov = 168.0
 n_windin_flu = 23
 n_windin_cov = 0
-n_windin_rsv = 23
+n_windin_rsv = 9
 
-[BritishColumbia]
-popsize = 15000000
-immunity_flu = 0.43
+[British-Columbia]
+popsize = 2485277 # adjusted from 5671114
+immunity_flu = 0.45
 immunity_cov = 0.70
 immunity_rsv = 0.55
 t_school_flu = 113.0
 t_school_rsv = 94.0
 t_school_cov = 168.0
-n_windin_flu = 23
-n_windin_cov = 0
-n_windin_rsv = 23
-
-[Alberta]
-popsize = 0
-immunity_flu = 0.0
-immunity_cov = 0.0
-immunity_rsv = 0.0
-t_school_flu = 0.0
-t_school_rsv = 0.0
-t_school_cov = 0.0
 n_windin_flu = 0
 n_windin_cov = 0
-n_windin_rsv = 0
+n_windin_rsv = 20
+
+[Alberta]
+popsize = 2184518 # adjusted from 4,909,030
+immunity_flu = 0.45
+immunity_cov = 0.70
+immunity_rsv = 0.55
+t_school_flu = 113.0
+t_school_rsv = 113.0
+t_school_cov = 168.0
+n_windin_flu = 20
+n_windin_cov = 0
+n_windin_rsv = 20
 
 [Manitoba]
 popsize = 0
@@ -46,7 +48,7 @@ n_windin_flu = 0
 n_windin_cov = 0
 n_windin_rsv = 0
 
-[NewBrunswick]
+[New-Brunswick]
 popsize = 0
 immunity_flu = 0.0
 immunity_cov = 0.0
@@ -58,7 +60,7 @@ n_windin_flu = 0
 n_windin_cov = 0
 n_windin_rsv = 0
 
-[Newfoundland]
+[Newfoundland-and-Labrador]
 popsize = 0
 immunity_flu = 0.0
 immunity_cov = 0.0
@@ -70,7 +72,7 @@ n_windin_flu = 0
 n_windin_cov = 0
 n_windin_rsv = 0
 
-[NovaScotia]
+[Nova-Scotia]
 popsize = 0
 immunity_flu = 0.0
 immunity_cov = 0.0
@@ -82,7 +84,7 @@ n_windin_flu = 0
 n_windin_cov = 0
 n_windin_rsv = 0
 
-[PEI]
+[Prince-Edward-Island]
 popsize = 0
 immunity_flu = 0.0
 immunity_cov = 0.0
