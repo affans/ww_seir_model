@@ -29,3 +29,4 @@ JuliaLocalPreferences.toml
 
 *.svg 
 *.png
+watch_and_sync.sh

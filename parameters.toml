@@ -41,12 +41,36 @@ popsize = 644755
 immunity_flu = 0.45
 immunity_cov = 0.70
 immunity_rsv = 0.55
-t_school_flu = 113.0    # flu emergence day 148 → t_school ~2 weeks prior
+t_school_flu = 92.0    # flu emergence day 148 → t_school ~2 weeks prior
 t_school_rsv = 106.0    # RSV emergence week 20, t_school ~2 weeks prior = day 106
 t_school_cov = 168.0    # winter amplification
 n_windin_flu = 22       # matches LOD emergence week 22
 n_windin_cov = 0
 n_windin_rsv = 5        # keep early RSV weeks 1-3 in likelihood to fit fading background
+
+[Quebec]
+popsize = 2186170
+immunity_flu = 0.43
+immunity_cov = 0.70
+immunity_rsv = 0.55
+t_school_flu = 141.0
+t_school_rsv = 92.0
+t_school_cov = 160.0
+n_windin_flu = 23
+n_windin_cov = 0
+n_windin_rsv = 10
+
+[Nova-Scotia]
+popsize = 168894
+immunity_flu = 0.45
+immunity_cov = 0.65
+immunity_rsv = 0.55
+t_school_flu = 127.0    # LOD emergence day 148, minus 3 weeks = day 127
+t_school_rsv = 120.0    # RSV emergence week 22 = day 148, minus 4 weeks
+t_school_cov = 141.0    # standard winter amplification
+n_windin_flu = 22       # matches LOD emergence week 22
+n_windin_cov = 0
+n_windin_rsv = 20       # RSV also emerges week 22
 
 [New-Brunswick]
 popsize = 0
@@ -72,31 +96,7 @@ n_windin_flu = 0
 n_windin_cov = 0
 n_windin_rsv = 0
 
-[Nova-Scotia]
-popsize = 0
-immunity_flu = 0.0
-immunity_cov = 0.0
-immunity_rsv = 0.0
-t_school_flu = 0.0
-t_school_rsv = 0.0
-t_school_cov = 0.0
-n_windin_flu = 0
-n_windin_cov = 0
-n_windin_rsv = 0
-
 [Prince-Edward-Island]
-popsize = 0
-immunity_flu = 0.0
-immunity_cov = 0.0
-immunity_rsv = 0.0
-t_school_flu = 0.0
-t_school_rsv = 0.0
-t_school_cov = 0.0
-n_windin_flu = 0
-n_windin_cov = 0
-n_windin_rsv = 0
-
-[Quebec]
 popsize = 0
 immunity_flu = 0.0
 immunity_cov = 0.0

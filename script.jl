@@ -108,7 +108,10 @@ function hyperparameters(name)
     βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
     βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
     βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
-    i0c = truncated(Normal(200.0, 500.0), 10.0, params.popsize * 0.05)
+    i0c = truncated(Normal(200.0, 500.0), 10.0, params.popsize * 0.05),
+    ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
+    ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
     )
     "British Columbia" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
@@ -119,8 +122,10 @@ function hyperparameters(name)
     βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),   # above-threshold winter
     βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
     βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
-    #i0c = truncated(Normal(5000.0, 2000.0), 100.0, params.popsize * 0.10)  #BC
-    i0c = truncated(Normal(4000.0, 800.0), 500.0, params.popsize * 0.10)
+    i0c = truncated(Normal(4000.0, 800.0), 500.0, params.popsize * 0.10),
+    ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
+    ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
     )
     "Alberta" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
@@ -129,7 +134,10 @@ function hyperparameters(name)
     βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),   # winter amplification
     βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
     βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
-    i0c = truncated(Normal(300.0, 150.0), 50.0, 2000.0)
+    i0c = truncated(Normal(300.0, 150.0), 50.0, 2000.0),
+    ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
+    ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
     )
     "Manitoba" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
@@ -138,7 +146,35 @@ function hyperparameters(name)
     βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
     βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
     βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
-    i0c     = truncated(Normal(800.0, 200.0), 100.0, params.popsize * 0.10)
+    i0c     = truncated(Normal(800.0, 200.0), 100.0, params.popsize * 0.10),
+    ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
+    ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
+    )
+    "Quebec" => (
+    βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
+    βᵢ_peak = truncated(Normal(1.05, 0.15), 0.65, 1.50),
+    βᵥ_base = truncated(Normal(0.664, 0.003), 0.655, 0.672),
+    βᵥ_peak = truncated(Normal(1.05, 0.08), 0.90, 1.20),
+    βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
+    βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
+    i0c = truncated(Normal(3000.0, 500.0), 500.0, params.popsize * 0.05),
+    ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
+    ε_cov = truncated(Exponential(5.0), 1.0, 40.0), # quebec
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
+    )
+    "Nova Scotia" => (
+    βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
+    βᵢ_peak = truncated(Normal(1.05, 0.15), 0.65, 1.50),
+    βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),   # sub-threshold — COVID declining after week 5
+    #βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
+    βᵥ_peak = truncated(Normal(1.0, 0.35), 0.60, 1.30),
+    βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
+    βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
+    i0c     = truncated(Normal(50.0, 8.0), 5.0, 100.0),    # keep — starting level is correct
+    ε_cov   = truncated(Exponential(0.05), 0.0, 0.08),
+    ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
     )
     _ => error("Province '$name' not found")
     end
@@ -354,9 +390,10 @@ end
     tspan = (0.0, days)
 
     θ ~ Truncated(Normal(0, 2.0), 0, Inf) 
-    ε_flu ~ truncated(Exponential(1.0), 0.1, 5.0)
-    ε_cov ~ truncated(Exponential(0.05), 0.0, 0.1)
-    ε_rsv ~ truncated(Exponential(3.0), 0.5, 10.0)
+    ε_flu ~ hyperparams.ε_flu
+    ε_cov ~ hyperparams.ε_cov
+    ε_rsv ~ hyperparams.ε_rsv
+
     params = [βᵢ_base, βᵢ_peak, βᵥ_base, βᵥ_peak, βᵣ_base, βᵣ_peak, 
         θ, popsize, ε_flu, ε_cov, ε_rsv,
         t_school_flu, t_school_cov, t_school_rsv]
@@ -784,3 +821,7 @@ function solve_seir_model()
     iflu = make_incidence(sol.u[14])
     return iflu
 end
+
+# function a12()
+#     println("hello world")
+# end
