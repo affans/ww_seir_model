@@ -104,11 +104,14 @@ function hyperparameters(name)
     "Ontario" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
     βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
-    βᵥ_base = truncated(Normal(0.50, 0.10), 0.30, 0.75),
-    βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
+    #βᵥ_base = truncated(Normal(0.645, 0.005), 0.635, 0.658),
+    βᵥ_base = truncated(Normal(0.645, 0.1), 0.625, 0.68),
+    #βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
+    βᵥ_peak = truncated(Normal(1.10, 0.12), 0.60, 1.30),
     βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
     βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
-    i0c = truncated(Normal(200.0, 500.0), 10.0, params.popsize * 0.05),
+    #i0c = truncated(Normal(200.0, 500.0), 10.0, params.popsize * 0.05),
+    i0c = truncated(Normal(2000.0, 500.0), 500.0, params.popsize * 0.05),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
     ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
     ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
@@ -167,7 +170,6 @@ function hyperparameters(name)
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
     βᵢ_peak = truncated(Normal(1.05, 0.15), 0.65, 1.50),
     βᵥ_base = truncated(Normal(0.45, 0.08), 0.25, 0.62),   # sub-threshold — COVID declining after week 5
-    #βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
     βᵥ_peak = truncated(Normal(1.0, 0.35), 0.60, 1.30),
     βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
     βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),

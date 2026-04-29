@@ -3,11 +3,11 @@
 [Ontario]
 popsize = 3712878 # adjust from 15000000 
 immunity_flu = 0.45
-immunity_cov = 0.70
+immunity_cov = 0.66
 immunity_rsv = 0.55
 t_school_flu = 113.0
 t_school_rsv = 94.0
-t_school_cov = 168.0
+t_school_cov = 140.0
 n_windin_flu = 23
 n_windin_cov = 0
 n_windin_rsv = 9
