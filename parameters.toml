@@ -2,9 +2,9 @@
 
 [Ontario]
 popsize = 3712878 # adjust from 15000000 
-immunity_flu = 0.45
-immunity_cov = 0.66
-immunity_rsv = 0.55
+immunity_flu = 0.435
+immunity_cov = 0.675
+immunity_rsv = 0.54
 t_school_flu = 113.0
 t_school_rsv = 94.0
 t_school_cov = 140.0
@@ -14,8 +14,8 @@ n_windin_rsv = 9
 
 [British-Columbia]
 popsize = 2485277 # adjusted from 5671114
-immunity_flu = 0.45
-immunity_cov = 0.70
+immunity_flu = 0.40
+immunity_cov = 0.705
 immunity_rsv = 0.55
 t_school_flu = 113.0
 t_school_rsv = 94.0
@@ -51,7 +51,7 @@ n_windin_rsv = 5        # keep early RSV weeks 1-3 in likelihood to fit fading b
 [Quebec]
 popsize = 2186170
 immunity_flu = 0.43
-immunity_cov = 0.70
+immunity_cov = 0.65
 immunity_rsv = 0.55
 t_school_flu = 141.0
 t_school_rsv = 92.0

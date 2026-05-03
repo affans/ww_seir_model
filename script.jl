@@ -1,16 +1,37 @@
-using DataFrames, CSV
-using TidierData
+using DataFrames, CSV, TOML, TidierData
 using Random, StatsBase, Distributions
 using DifferentialEquations 
 using Turing, LogDensityProblems
 using MCMCChains, KernelDensity
 using SavitzkyGolay # filter
-using Gnuplot, PrettyTables, TerminalPager, Match
-using Dates, Parameters, Configurations, TOML, GarishPrint
-Gnuplot.options.term = "sixelgd truecolor enhanced size 1000,400 scroll font arial 10"
+using Gnuplot, PrettyTables, TerminalPager, GarishPrint
+using Dates, Parameters, Configurations, Match, JSON
+using Serialization
+
+Gnuplot.options.term = "sixelgd truecolor enhanced size 900,450 scroll font Arial 12"
 # when adding new packages, avoid precompilation by
 # pkg> add --preserve=all Example 
 # and see https://pkgdocs.julialang.org/dev/environments/#Controlling-Auto-precompilation
+
+function gp_config()
+    Gnuplot.options.term = "sixelgd truecolor enhanced size 900,450 scroll font 'Helvetica, 10'"
+    return """
+    set style line 1 lw 2.5 lt 1 lc rgb '#1f77b4'  # blue
+    set style line 2 lw 2.5 lt 1 lc rgb '#ff7f0e'  # orange
+    set style line 3 lw 2.5 lt 1 lc rgb '#2ca02c'  # green
+    set style line 4 lw 2.5 lt 1 lc rgb '#d62728'  # red
+    set style line 5 lw 2.5 lt 1 lc rgb '#9467bd'  # purple
+    set style line 6 lw 2.5 lt 1 lc rgb '#8c564b'  # brown
+    set style line 7 lw 2.5 lt 1 lc rgb '#e377c2'  # pink
+    set style line 8 lw 2.5 lt 1 lc rgb '#7f7f7f'  # grey
+    set style line 101 lc rgb '#808080' lt 1 lw 2
+    set border 3 front ls 101
+    set style line 102 lc rgb '#99808080' lt 1 lw 1
+    set grid back ls 102
+    set tics nomirror out scale 0.75
+    set format '%g'
+    """
+end
 
 @option struct ProvinceParams
     popsize::Int
@@ -55,24 +76,32 @@ function read_province(name)
         @filter(ismissing(site) && ismissing(city))
         @filter(measureid in ("fluA", "fluB", "covN2", "rsv"))
         # use epiweek 26 if using WIND IN period of 9
-        @filter(EpiYear == 2024 && EpiWeek >= 26 || EpiYear == 2025 && EpiWeek <= 34) 
+        @filter(EpiYear == 2024 && EpiWeek >= 27 || EpiYear == 2025 && EpiWeek <= 34) 
         @select(pruid, site, city, province, weekstart, EpiYear, EpiWeek, measureid, w_avg, populationcoverage)
         @pivot_wider(df, names_from = measureid, values_from = w_avg)
-        @mutate(flu = fluA + fluB) # combine fluA and fluB into one signal.
+        @mutate(flu = fluA + fluB) # combine fluA and fluB into one signal. 
         @mutate(cov_sg = ~apply_sg(covN2)) # the ~ means not to vectorize. 
         @mutate(flu_sg = ~apply_sg(flu)) # the ~ means not to vectorize. 
-        @mutate(rsv_sg = ~apply_sg(rsv)) # the ~ means not to vectorize. 
-    end
+        @mutate(rsv_sg = ~apply_sg(rsv)) # the ~ means not to vectorize.
+    end    
+    
+    # print the data
+    println("=== $name ===")
+    println("Flu:  $(round.(df.flu_sg, digits=2))")
+    println("Covid: $(round.(df.cov_sg, digits=2))")
+    println("RSV:  $(round.(df.rsv_sg, digits=2))")
 
     # plot the data
     @gp "reset" 
+    @gp :- gp_config() :-
     @gp :- "set multiplot layout 1, 3" :- # 1 row, 3 columns
-    @gp :- 1 1:nrow(df) df.covN2 "with lines title 'covN2' lc rgb 'black'" :- 
-    @gp :- 1 1:nrow(df) df.cov_sg "with lines title 'covN2_sg' lc rgb 'blue'" :-
-    @gp :- 2 1:nrow(df) df.flu "with lines title 'flu' lc rgb 'black'" :- 
-    @gp :- 2 1:nrow(df) df.flu_sg "with lines title 'flu_sg' lc rgb 'blue'" :-
-    @gp :- 3 1:nrow(df) df.rsv "with lines title 'rsv' lc rgb 'black'" :- 
-    @gp :- 3 1:nrow(df) df.rsv_sg "with lines title 'rsv_sg' lc rgb 'blue'" :- 
+    @gp :- 1 1:nrow(df) df.covN2 "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 2 1:nrow(df) df.flu "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 3 1:nrow(df) df.rsv "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 1 1:nrow(df) df.cov_sg "with lines notitle ls 1" :-
+    @gp :- 3 1:nrow(df) df.rsv_sg "with lines notitle ls 1" :- 
+    @gp :- 2 1:nrow(df) df.flu_sg "with lines notitle ls 1" :-
+    #Gnuplot.save("ww_all_prov.svg", term="svg enhanced size 900, 350 font 'Helvetica, 16'")
     println("plot set, call using @gp in terminal to display.") 
 
     println("adjusted pop size: $(params_obj.popsize)")
@@ -87,12 +116,6 @@ function read_province(name)
     rsv: $lod_week_start_rsv (in days: $(lod_week_start_rsv * 7 - 6))
         Use information to set the correct wind-in period in province parameters")
 
-    println("SG data: 
-    flu: $(round.(df.flu_sg, digits=2)),
-
-    covid: $(round.(df.cov_sg, digits=2)),
-
-    rsv: $(round.(df.rsv_sg, digits=2)))")
 
     return df::DataFrame, params_obj
 end
@@ -104,16 +127,15 @@ function hyperparameters(name)
     "Ontario" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
     βᵢ_peak = truncated(Normal(1.05, 0.15), 0.50, 1.50),
-    #βᵥ_base = truncated(Normal(0.645, 0.005), 0.635, 0.658),
     βᵥ_base = truncated(Normal(0.645, 0.1), 0.625, 0.68),
-    #βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),
     βᵥ_peak = truncated(Normal(1.10, 0.12), 0.60, 1.30),
     βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
     βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
     #i0c = truncated(Normal(200.0, 500.0), 10.0, params.popsize * 0.05),
     i0c = truncated(Normal(2000.0, 500.0), 500.0, params.popsize * 0.05),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
-    ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
+    #ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
+    ε_cov = truncated(Exponential(1.0), 0.0, 0.1),
     ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
     )
     "British Columbia" => (
@@ -125,7 +147,7 @@ function hyperparameters(name)
     βᵥ_peak = truncated(Normal(0.87, 0.12), 0.60, 1.30),   # above-threshold winter
     βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
     βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
-    i0c = truncated(Normal(4000.0, 800.0), 500.0, params.popsize * 0.10),
+    i0c = truncated(Normal(2000.0, 800.0), 500.0, params.popsize * 0.10),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
     ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
     ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
@@ -174,7 +196,8 @@ function hyperparameters(name)
     βᵣ_base = truncated(Normal(0.50, 0.10), 0.25, 0.72),
     βᵣ_peak = truncated(Normal(1.05, 0.12), 0.55, 1.10),
     i0c     = truncated(Normal(50.0, 8.0), 5.0, 100.0),    # keep — starting level is correct
-    ε_cov   = truncated(Exponential(0.05), 0.0, 0.08),
+    #ε_cov   = truncated(Exponential(0.05), 0.0, 0.08),
+    ε_cov   = truncated(Exponential(1.0), 0.0, 0.08),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
     ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
     )
@@ -191,29 +214,6 @@ function find_emergence_week(signal, threshold=1.0)
     end
     return length(signal)
 end
-
-function check_M_priors()
-    df = read_province("Ontario")
-    N, immunity_flu, immunity_cov, immunity_rsv = province_params("Ontario") # initial conditions for the ODE, based on province parameters.
-    N = round(Int64, N * unique(df.populationcoverage)[1]) # adjust the effective population
-    println("population of Ontario, adjusted: $N")
-
-    W_cov_peak = maximum(skipmissing(df.cov_sg))
-    W_flu_peak = maximum(skipmissing(df.flu_sg))
-    W_rsv_peak = maximum(skipmissing(df.rsv_sg))
-    
-    # rough peak prevalence assuming R_eff and SEIR dynamics
-    # peak_I/N ≈ S0/N × (1 - 1/Reff) × 0.3  (rough rule of thumb)
-    Reff_cov = 1.2; Reff_flu = 1.35; Reff_rsv = 1.5
-    peak_frac_cov = (1 - immunity_cov) * (1 - 1/Reff_cov) * 0.3
-    peak_frac_flu = (1 - immunity_flu) * (1 - 1/Reff_flu) * 0.3
-    peak_frac_rsv = (1 - immunity_rsv) * (1 - 1/Reff_rsv) * 0.3
-    
-    println("Implied log_M_c: $(round(log(W_cov_peak / peak_frac_cov), digits=2))")
-    println("Implied log_M_f: $(round(log(W_flu_peak / peak_frac_flu), digits=2))")
-    println("Implied log_M_r: $(round(log(W_rsv_peak / peak_frac_rsv), digits=2))")
-end
-
 
 function sym_defn_ode(du, u, p, t)
     # definitions of SEIR models for each covid, flu, rsv virus 
@@ -310,8 +310,10 @@ function sym_convolve_seir(incidence, kernel)
 end
 
 # set up a Turing model 
-@model function inference_model(obs_ww_flu, obs_ww_cov, obs_ww_rsv, hyperparams, province_params)
-    
+@model function inference_model(obs_ww_flu, obs_ww_cov, obs_ww_rsv, hyperparams, province_params; nullmodel=false)
+    # if nullmodel == true, theta is set to zero manually 
+    # meaning there is no sampled theta - adjust post hoc scripts accordingly.
+
     # unpack the province parameters 
     (; popsize,
     immunity_flu, # pre-immunity levels
@@ -391,7 +393,12 @@ end
     days = weeks * 7.0  
     tspan = (0.0, days)
 
-    θ ~ Truncated(Normal(0, 2.0), 0, Inf) 
+    if nullmodel 
+        θ = 0.0 
+    else 
+        θ ~ Truncated(Normal(0, 2.0), 0, Inf) 
+    end
+
     ε_flu ~ hyperparams.ε_flu
     ε_cov ~ hyperparams.ε_cov
     ε_rsv ~ hyperparams.ε_rsv
@@ -467,7 +474,8 @@ end
     end
 end
 
-function run_inference(name) 
+function run_inference(name, m0_or_m1) 
+    m0_or_m1 in (:null, :m1) || error("null_or_alter must be either :null or :m1")
     df, province_params = read_province(name) 
 
     obs_flu = df.flu_sg
@@ -478,14 +486,31 @@ function run_inference(name)
     hp = hyperparameters(name)
 
     # for type stability: Turing.DynamicPPL.DebugUtils.model_warntype(_m1)    
-    _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params)
-    #return Turing.DynamicPPL.DebugUtils.model_warntype(_m1)    
-    m1 = sample(_m1, NUTS(), MCMCThreads(), 1000, 4)
-    #println("finished inference")
-    return _m1, m1
+    if m0_or_m1 == :m1
+        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=false)
+    else 
+        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=true)
+    end
+    chains = sample(_m1, NUTS(), MCMCThreads(), 1000, 4)    
+    return chains
 end 
 
-## analysis functions 
+function save_chain(filename, chain)
+    # can save as a serialized file
+    Serialization.serialize(filename, chain)
+end
+
+function run_all_scenarios() 
+    provs = ["Ontario", "British Columbia", "Alberta", "Manitoba", "Quebec", "Nova Scotia"]
+    for prov in provs
+        m0 = run_inference(prov, :null)
+        m1 = run_inference(prov, :m1)
+        save_chain("outputs/chain_$(prov)_null.jls", m0)
+        save_chain("outputs/chain_$(prov)_m1.jls", m1)
+    end
+end
+
+#### POST HOC - ANALYSIS FUNCTIONS
 function calculate_reproduction_number(chain, immunity_flu, immunity_cov, immunity_rsv)
     # R0_bio = β / γ
     # R_eff = R0_bio * (1 - immunity)
@@ -551,30 +576,33 @@ function plot_predictive(chain, name)
     
     weeks = length(obs_flu)
     days = weeks * 7 + 1
-
     # run the ODE model based on posteriors
-    nsamples = 1000 
-    samples = get(sample(chain, nsamples); section=:parameters)
-
+    n_samples = 1000 
+    samples = get(sample(chain, n_samples); section=:parameters)
+    
     # empty matrices to store WW results
-    ww_cov_mat = zeros(nsamples, weeks)
-    ww_flu_mat = zeros(nsamples, weeks)
-    ww_rsv_mat = zeros(nsamples, weeks)
+    ww_cov_mat = zeros(n_samples, weeks)
+    ww_flu_mat = zeros(n_samples, weeks)
+    ww_rsv_mat = zeros(n_samples, weeks)
 
     # empty matrices to store incidence results (in days)
-    inc_cov_mat = zeros(nsamples, weeks * 7 + 1) 
-    inc_flu_mat = zeros(nsamples, weeks * 7 + 1)
-    inc_rsv_mat = zeros(nsamples, weeks * 7 + 1)
+    inc_cov_mat = zeros(n_samples, weeks * 7 + 1) 
+    inc_flu_mat = zeros(n_samples, weeks * 7 + 1)
+    inc_rsv_mat = zeros(n_samples, weeks * 7 + 1)
 
     # empty matrices to store prevalnece results (in days)
-    prev_cov_mat = zeros(nsamples, weeks * 7 + 1) 
-    prev_flu_mat = zeros(nsamples, weeks * 7 + 1)
-    prev_rsv_mat = zeros(nsamples, weeks * 7 + 1)
+    prev_cov_mat = zeros(n_samples, weeks * 7 + 1) 
+    prev_flu_mat = zeros(n_samples, weeks * 7 + 1)
+    prev_rsv_mat = zeros(n_samples, weeks * 7 + 1)
 
-    for i in 1:nsamples
+    # see if theta is in the model (it won't be in the null model)
+    mtype = Symbol("θ") in keys(chain)
+    println("contains θ: $mtype")
+
+    for i in 1:n_samples
         # extract the parameters for this sample
-        θ = samples[:θ][i]
-        βᵢ_base = samples[:βᵢ_base][i]
+        θ = mtype ? samples[:θ][i] : 0.0
+        βᵢ_base = samples[:βᵢ_base][i] 
         βᵢ_peak = samples[:βᵢ_peak][i]
         βᵥ_base = samples[:βᵥ_base][i]
         βᵥ_peak = samples[:βᵥ_peak][i]
@@ -645,7 +673,7 @@ function plot_predictive(chain, name)
     _cov = vec(mean(prev_cov_mat, dims = 1))
     _flu = vec(mean(prev_flu_mat, dims = 1))
     _rsv = vec(mean(prev_rsv_mat, dims = 1))
-    θ_mean = mean(samples[:θ])
+    θ_mean = mtype ? mean(samples[:θ]) : 0.0
     supp_cov = [1 - exp(-θ_mean * (_flu[t] + _rsv[t])/popsize) for t in 1:days]
     supp_rsv = [1 - exp(-θ_mean * (_flu[t] + _cov[t])/popsize) for t in 1:days]
     supp_flu = [1 - exp(-θ_mean * (_cov[t] + _rsv[t])/popsize) for t in 1:days]
@@ -764,7 +792,93 @@ function plot_predictive(chain, name)
     # @gp :-  chain[:, :θ, 4] "with lines title 'Chain 4' lc rgb 'orange'" :-
     # @gp 
 
+    # return only one year of incidence since the fitting process used 
+    # the first 9 weeks as a windin (which is also used in the ODE simulation)
+    time_filter = 63 + 1 # 9 weeks x 7 days 
+    return (flu = inc_flu_mat[:, time_filter:end], cov = inc_cov_mat[:, time_filter:end], rsv = inc_rsv_mat[:, time_filter:end])
+end
+
+# given an incidence matrix (samples x time), calculate the mean, 95% credible interval for the peak magnitude, and the mean peak timing.
+function _calc_stats(inc_mat)
+    max_magnitudes, max_times = findmax(inc_mat, dims=2)
+    mean_magnitude = round(Int, mean(vec(max_magnitudes)))
+    low_magnitude = round(Int, quantile(vec(max_magnitudes), 0.025))
+    high_magnitude = round(Int, quantile(vec(max_magnitudes), 0.975))
+    mean_time = round(Int, median([e[2] / 7 for e in max_times])) # since e.g. e = CartesianIndex(2, 168)
+    low_time = round(Int, quantile(vec([e[2] / 7 for e in max_times]), 0.025)) # since e.g. e = CartesianIndex(2, 168)
+    low_time = round(Int, quantile(vec([e[2] / 7 for e in max_times]), 0.025)) # since e.g. e = CartesianIndex(2, 168)
+    high_time = round(Int, quantile(vec([e[2] / 7 for e in max_times]), 0.975)) # since e.g. e = CartesianIndex(2, 168)
+    return mean_magnitude, low_magnitude, high_magnitude, 
+            mean_time, low_time, high_time
+end
+
+function posterior_analysis(m0, m1, name)
+    table_backend = :text
+    m0_inc = plot_predictive(m0, name)
+    m1_inc = plot_predictive(m1, name)
+
+    # print the theta value
+    samples = get(sample(m1, 5000); section=:parameters)
+    meanθ, lowθ, highθ = round.((mean(vec(samples[:θ])), quantile(vec(samples[:θ]), 0.025), quantile(vec(samples[:θ]), 0.975)), digits=2)
+    println("\nM1 θ: $meanθ (95% Cr I: $lowθ, $highθ)")
+
+    # plot the incidence curves for M0 and M1
+    #@gp "reset"
+    #@gp :- "set multiplot layout 3, 1" :-
+    #@gp :- 1 1:size(m0_inc.flu, 2) vec
+
+
+    # print the changes in peak timing and magnitude
+    time_matrix = Matrix{Any}(nothing, 0, 3)
+    for disease in [:flu, :cov, :rsv]
+        m0_m, m0_lm, m0_hm, m0_t, m0_lt, m0_ht = _calc_stats(getfield(m0_inc, disease))
+        m1_m, m1_lm, m1_hm, m1_t, m1_lt, m1_ht = _calc_stats(getfield(m1_inc, disease))
+        time_matrix = vcat(time_matrix, [string(disease) "$m0_t ($m0_lt, $m0_ht)" "$m1_t ($m1_lt, $m1_ht)"])
+    end
+    println(pretty_table(time_matrix, backend=table_backend, title = "Timing Statistics", column_labels = ["Disease", "M0 (95% CI)", "M1 (95% CI)"]))
+
+    mag_matrix = Matrix{Any}(nothing, 0, 3)
+    for disease in [:flu, :cov, :rsv]
+        m0_m, m0_lm, m0_hm, m0_t, m0_lt, m0_ht = _calc_stats(getfield(m0_inc, disease))
+        m1_m, m1_lm, m1_hm, m1_t, m1_lt, m1_ht = _calc_stats(getfield(m1_inc, disease))
+        mag_matrix = vcat(mag_matrix, [string(disease) "$m0_m ($m0_lm, $m0_hm)" "$m1_m ($m1_lm, $m1_hm)"])
+    end
+    println(pretty_table(mag_matrix, backend=table_backend, title = "Magnitude Statistics", column_labels = ["Disease", "M0 (95% CI)", "M1 (95% CI)"]))
+    
     return nothing
+end
+
+function plot_all_wastewater() 
+    ## WIP 
+    # for manuscript, plot all wastewater data together to show the patterns across diseases.
+    provs = ["British Columbia", "Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec"]
+    df1, _ = read_province("British Columbia")
+    df2, _ = read_province("Alberta")
+    df3, _ = read_province("Ontario")
+    df4, _ = read_province("Manitoba")
+    df5, _ = read_province("Nova Scotia")
+    df6, _ = read_province("Quebec")
+
+    # plot the data
+    @gp "reset" 
+    @gp :- gp_config() :-
+    @gp :- "set multiplot layout 6, 3" :- # 1 row, 3 columns
+    @gp :- 1 1:nrow(df1) df1.covN2 "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 2 1:nrow(df1) df1.flu "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 3 1:nrow(df1) df1.rsv "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 1 1:nrow(df1) df1.cov_sg "with lines notitle ls 1" :-
+    @gp :- 2 1:nrow(df1) df1.flu_sg "with lines notitle ls 1" :-
+    @gp :- 3 1:nrow(df1) df1.rsv_sg "with lines notitle ls 1" :- 
+
+    @gp :- 4 1:nrow(df1) df2.covN2 "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 5 1:nrow(df1) df2.flu "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 6 1:nrow(df1) df2.rsv "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 4 1:nrow(df1) df2.cov_sg "with lines notitle ls 1" :-
+    @gp :- 6 1:nrow(df1) df2.rsv_sg "with lines notitle ls 1" :- 
+    @gp :- 5 1:nrow(df1) df2.flu_sg "with lines notitle ls 1" :-
+
+    #Gnuplot.save("ww_all_prov.svg", term="svg enhanced size 900, 350 font 'Helvetica, 16'")
+    println("plot set, call using @gp in terminal to display.") 
 end
 
 function solve_seir_model() 
@@ -823,7 +937,3 @@ function solve_seir_model()
     iflu = make_incidence(sol.u[14])
     return iflu
 end
-
-# function a12()
-#     println("hello world")
-# end
