@@ -30,6 +30,7 @@ function gp_config()
     set grid back ls 102
     set tics nomirror out scale 0.75
     set format '%g'
+    set samples 2000
     """
 end
 
@@ -500,6 +501,10 @@ function save_chain(filename, chain)
     Serialization.serialize(filename, chain)
 end
 
+function read_chain(filename)
+    return Serialization.deserialize(filename)
+end
+
 function run_all_scenarios() 
     provs = ["Ontario", "British Columbia", "Alberta", "Manitoba", "Quebec", "Nova Scotia"]
     for prov in provs
@@ -509,6 +514,70 @@ function run_all_scenarios()
         save_chain("outputs/chain_$(prov)_m1.jls", m1)
     end
 end
+
+function _optimize_ontario(iflu, icov, irsv, tflu, trsv) 
+    # objective function for comparing inference results to observed data, 
+    # for example by simulating the ODE with posterior mean parameters and calculating a goodness-of-fit metric.
+    ### temp function 
+    df, _ = read_province("Ontario")
+    obs_flu = df.flu_sg
+    obs_cov = df.cov_sg
+    obs_rsv = df.rsv_sg
+
+    data = TOML.parsefile("parameters.toml")
+    province_params = from_dict(ProvinceParams, data["Ontario"]; 
+        immunity_flu = iflu,
+        immunity_cov = icov,
+        immunity_rsv = irsv,
+        t_school_flu = tflu,
+        t_school_rsv = trsv
+    ) # convert Configurations struct
+    
+    println("T FLU: $tflu")
+    fname = "iflu" * string(round(Int, iflu * 10000)) * "_" * 
+                "icov" * string(round(Int, icov * 10000)) * "_" * 
+                "irsv" * string(round(Int, irsv * 10000)) * "_" * 
+                "tflu" * string(round(Int, tflu)) * "_" * 
+                "trsv" * string(round(Int, trsv))
+    println(fname)
+    return 0 
+    hp = hyperparameters("Ontario")
+    _m1 = inference_model(obs_flu, obs_cov, obs_rsv, hp, province_params; nullmodel=false)
+    m1 = sample(_m1, NUTS(), MCMCThreads(), 50, 4)  
+    
+    
+    #save_chain(m1, "/home/asw850/optim_res/chain_ontario_$(iflu)_$(icov)_$(irsv)_$(tflu)_$(trsv).jls")
+    post_mat = chain_analysis(m1, "Ontario", plot_figs=false)
+
+    # compute the errors from the observed data (this assesses the model fit to the data) 
+    flu_error = sum((vec(mean(post_mat.ww_flu, dims = 1)) - obs_flu).^2)
+    cov_error = sum((vec(mean(post_mat.ww_cov, dims = 1)) - obs_cov).^2)
+    rsv_error = sum((vec(mean(post_mat.ww_rsv, dims = 1)) - obs_rsv).^2)
+    println("Sum of squared errors:
+                flu: $(round(flu_error, digits=2))
+                cov: $(round(cov_error, digits=2))
+                rsv: $(round(rsv_error, digits=2))")
+    return flu_error #, cov_error, rsv_error
+end
+
+function optimize_ontario()
+    # Main macro. The first argument to the for loop is always interpreted as the number of iterations (except for hyperband optimizer)
+    ho = Hyperoptimizer(5, 
+
+            _iflu = rand(Uniform(0.42, 0.45), 1000),
+            _icov = rand(Uniform(0.64, 0.68), 1000),
+            _irsv = rand(Uniform(0.52, 0.56), 1000),
+            _tflu = [105, 110, 113, 116, 119, 122, 125],
+            _trsv = [90, 91, 92, 93, 94, 95, 96, 97, 98]
+        )
+    
+    for (i, _iflu, _icov, _irsv, _tflu, _trsv) in ho
+        _optimize_ontario(_iflu, _icov, _irsv, _tflu, _trsv)
+        push!(ho.history, [_iflu, _icov, _irsv, _tflu, _trsv])
+    end
+    return ho
+end
+
 
 #### POST HOC - ANALYSIS FUNCTIONS
 function calculate_reproduction_number(chain, immunity_flu, immunity_cov, immunity_rsv)
@@ -547,7 +616,7 @@ function calculate_reproduction_number(chain, immunity_flu, immunity_cov, immuni
     println("  Expected R_eff range: pre ~0.8-1.1, post ~1.5-2.0")
 end
 
-function plot_predictive(chain, name)
+function chain_analysis(chain, name; plot_figs = true)
     # performs the analysis of the posterior samples
     # and plots the predictive distribution of the wastewater signal,
     # as well as the inferred incidence and prevalence curves.
@@ -666,7 +735,7 @@ function plot_predictive(chain, name)
     end
 
     # print statistics
-    display(summarystats(chain))  # posteriors
+    display(chain)  # posteriors
     calculate_reproduction_number(chain, immunity_flu, immunity_cov, immunity_rsv) # effective reproduction number 
     
     # temporal suppression calculation
@@ -688,7 +757,7 @@ function plot_predictive(chain, name)
                 covid: $(round(sum(vec(mean(inc_cov_mat, dims = 1))) / popsize * 100, digits=1))%
                 rsv: $(round(sum(vec(mean(inc_rsv_mat, dims = 1))) / popsize * 100, digits=1))%")
     
-    # peak predictions (peak magnitude, peak timing)
+    # Plot the posterior predictictions of the WW (this assesses the model fit to the data)
     flu_model_peak_max, flu_model_peak_time = findmax(vec(mean(ww_flu_mat, dims = 1)))
     cov_model_peak_max, cov_model_peak_time = findmax(vec(mean(ww_cov_mat, dims = 1)))
     rsv_model_peak_max, rsv_model_peak_time = findmax(vec(mean(ww_rsv_mat, dims = 1)))
@@ -706,44 +775,39 @@ function plot_predictive(chain, name)
         "Covid" cov_model_peak_time cov_sg_peak_time cov_orig_peak_time;
         "RSV" rsv_model_peak_time rsv_sg_peak_time rsv_orig_peak_time
     ]
-    display(pretty_table(mat, backend=:text, column_labels = ["Peak Timing", "Model", "SG", "Raw"]))
+    println(pretty_table(mat, backend=:text, column_labels = ["Peak Timing", "Model", "SG", "Raw"]))
 
     mat = [
         "Flu" flu_model_peak_max flu_sg_peak_max flu_orig_peak_max;
         "Covid" cov_model_peak_max cov_sg_peak_max cov_orig_peak_max;
         "RSV" rsv_model_peak_max rsv_sg_peak_max rsv_orig_peak_max
     ]
-    display(pretty_table(mat, backend=:text, column_labels = ["Peak Values", "Model", "SG", "Raw"]))
+    println(pretty_table(mat, backend=:text, column_labels = ["Peak Values", "Model", "SG", "Raw"]))
+
+    # compute the errors from the observed data (this assesses the model fit to the data) 
+    flu_error = sum((vec(mean(ww_flu_mat, dims = 1)) - obs_flu).^2)
+    cov_error = sum((vec(mean(ww_cov_mat, dims = 1)) - obs_cov).^2)
+    rsv_error = sum((vec(mean(ww_rsv_mat, dims = 1)) - obs_rsv).^2)
+    println("Sum of squared errors:
+                flu: $(round(flu_error, digits=2))
+                cov: $(round(cov_error, digits=2))
+                rsv: $(round(rsv_error, digits=2))")
 
     #print the WW vectors 
-    println("
-    flu vector: 
+    println("flu vector: 
         observed: $(round.(obs_flu, digits=2))
         modelled: $(round.(vec(mean(ww_flu_mat, dims = 1)), digits=2))
     ")
-    println("
-    cov vector: 
+    println("cov vector: 
         observed: $(round.(obs_cov, digits=2))
         modelled: $(round.(vec(mean(ww_cov_mat, dims = 1)), digits=2))
     ")
-    println("
-    rsv vector: 
+    println("rsv vector: 
         observed: $(round.(obs_rsv, digits=2))
         modelled: $(round.(vec(mean(ww_rsv_mat, dims = 1)), digits=2))
     ")
-    
-    
-    # # find the peak week for each individual sample
-    # peak_weeks_rsv = [argmax(ww_rsv_mat[i, :]) for i in 1:nsamples]
-    # peak_weeks_flu = [argmax(ww_flu_mat[i, :]) for i in 1:nsamples]
 
-    # println("RSV peak week distribution:")
-    # println("  Median: $(median(peak_weeks_rsv))")
-    # println("  Mean:   $(round(mean(peak_weeks_rsv), digits=1))")
-    # println("  Std:    $(round(std(peak_weeks_rsv), digits=1))")
-    # println("  2.5%-97.5%: [$(quantile(peak_weeks_rsv, 0.025)), $(quantile(peak_weeks_rsv, 0.975))]")
-    # println("  Observed: 29")
-
+    if plot_figs
     #plot the posteriors and trace plots 
     @gp "reset"
     @gp :- "set multiplot layout 3, 1" :-
@@ -756,17 +820,15 @@ function plot_predictive(chain, name)
     @gp :- 1 1:weeks obs_flu_raw "with lines title 'Obs Flu Raw' lw 2 lc rgb 'red'" :-
     @gp :- 2 1:weeks obs_cov_raw "with lines title 'Obs Covid Raw' lw 2 lc rgb 'red'" :-
     @gp :- 3 1:weeks obs_rsv_raw "with lines title 'Obs RSV Raw' lw 2 lc rgb 'red'" :-
-
-    Gnuplot.save("outputs/predictive_wastewater.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+    #Gnuplot.save("outputs/predictive_wastewater.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
     display(@gp)
-    
 
     @gp "reset"
     @gp :- "set multiplot layout 3, 1" :-
     @gp :- 1 1:size(inc_flu_mat, 2) vec(mean(inc_flu_mat, dims = 1)) "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
     @gp :- 2 1:size(inc_cov_mat, 2) vec(mean(inc_cov_mat, dims = 1)) "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
     @gp :- 3 1:size(inc_rsv_mat, 2) vec(mean(inc_rsv_mat, dims = 1)) "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
-    Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+    #Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
     display(@gp)
 
     @gp "reset"
@@ -774,28 +836,20 @@ function plot_predictive(chain, name)
     @gp :- 1 1:size(inc_flu_mat, 2) cumsum(vec(mean(inc_flu_mat, dims = 1))) "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
     @gp :- 2 1:size(inc_cov_mat, 2) cumsum(vec(mean(inc_cov_mat, dims = 1))) "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
     @gp :- 3 1:size(inc_rsv_mat, 2) cumsum(vec(mean(inc_rsv_mat, dims = 1))) "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
-    Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+    #Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
     display(@gp)
 
     @gp "reset" 
     @gp :- 1:days supp_flu "with lines title 'Flu Suppression' lw 2 lc rgb 'red'" :-
     @gp :- 1:days supp_cov "with lines title 'Covid Suppression' lw 2 lc rgb 'blue'" :-
     @gp :- 1:days supp_rsv "with lines title 'RSV Suppression' lw 2 lc rgb 'green'" :-
-    Gnuplot.save("outputs/supressive_temporal.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+    #Gnuplot.save("outputs/supressive_temporal.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
     display(@gp)
-
-    # @gp "reset"
-    # #@gp :- "set multiplot layout $numchains, 1" :-
-    # @gp :-  chain[:, :θ, 1] "with lines title 'Chain 1' lc rgb 'blue'" :-
-    # @gp :-  chain[:, :θ, 2] "with lines title 'Chain 2' lc rgb 'red'" :-
-    # @gp :-  chain[:, :θ, 3] "with lines title 'Chain 3' lc rgb 'green'" :-
-    # @gp :-  chain[:, :θ, 4] "with lines title 'Chain 4' lc rgb 'orange'" :-
-    # @gp 
-
-    # return only one year of incidence since the fitting process used 
-    # the first 9 weeks as a windin (which is also used in the ODE simulation)
-    time_filter = 63 + 1 # 9 weeks x 7 days 
-    return (flu = inc_flu_mat[:, time_filter:end], cov = inc_cov_mat[:, time_filter:end], rsv = inc_rsv_mat[:, time_filter:end])
+    end 
+    # return the posterior predictive matrices for further analysis if needed
+    return (inc_flu = inc_flu_mat, inc_cov = inc_cov_mat, inc_rsv = inc_rsv_mat,
+            prev_flu = prev_flu_mat, prev_cov = prev_cov_mat, prev_rsv = prev_rsv_mat,
+            ww_flu = ww_flu_mat, ww_cov = ww_cov_mat, ww_rsv = ww_rsv_mat)
 end
 
 # given an incidence matrix (samples x time), calculate the mean, 95% credible interval for the peak magnitude, and the mean peak timing.
@@ -813,9 +867,13 @@ function _calc_stats(inc_mat)
 end
 
 function posterior_analysis(m0, m1, name)
+
+    #time_filter = 63 + 1 # 9 weeks x 7 days 
+    #return (flu = inc_flu_mat[:, time_filter:end]
+
     table_backend = :text
-    m0_inc = plot_predictive(m0, name)
-    m1_inc = plot_predictive(m1, name)
+    m0_inc = chain_analysis(m0, name)
+    m1_inc = chain_analysis(m1, name)
 
     # print the theta value
     samples = get(sample(m1, 5000); section=:parameters)
@@ -879,6 +937,25 @@ function plot_all_wastewater()
 
     #Gnuplot.save("ww_all_prov.svg", term="svg enhanced size 900, 350 font 'Helvetica, 16'")
     println("plot set, call using @gp in terminal to display.") 
+end
+
+function plot_shedding_kernels() 
+    @gp "reset" 
+    @gp :- gp_config() :-
+    @gp :- "set xlabel 'Days since infection'" :-
+    @gp :- "set ylabel 'Relative Shedding'" :-
+    #@gp :- "set key spacing 1.2" :-
+    #@gp :- "set key width 2" :-
+    #@gp :- "set key height 1" :-
+    @gp :- "set xtics 1" :- 
+    @gp :- "set key opaque" :- 
+    @gp :- "set key Left reverse" :- 
+    @gp :- 1:length(K_FLU) K_FLU "smooth csplines with lines title 'Flu' ls 1" :-
+    @gp :- 1:length(K_COV) K_COV "smooth csplines with lines title 'Covid' ls 2" :-
+    @gp :- 1:length(K_RSV) K_RSV "smooth csplines with lines title 'RSV' ls 3" :-
+    Gnuplot.save("outputs/shedding_kernels.svg", term="svg enhanced size 1000, 400 font 'Helvetica, 16'")
+    println("plot set, call using @gp in terminal to display.")
+    @gp
 end
 
 function solve_seir_model() 
