@@ -15,20 +15,24 @@ Gnuplot.options.term = "sixelgd truecolor enhanced size 900,450 scroll font Aria
 
 function gp_config()
     Gnuplot.options.term = "sixelgd truecolor enhanced size 900,450 scroll font 'Helvetica, 10'"
+    # colorscheme from colorbrewer
     return """
-    set style line 1 lw 2.5 lt 1 lc rgb '#1f77b4'  # blue
-    set style line 2 lw 2.5 lt 1 lc rgb '#ff7f0e'  # orange
-    set style line 3 lw 2.5 lt 1 lc rgb '#2ca02c'  # green
-    set style line 4 lw 2.5 lt 1 lc rgb '#d62728'  # red
-    set style line 5 lw 2.5 lt 1 lc rgb '#9467bd'  # purple
-    set style line 6 lw 2.5 lt 1 lc rgb '#8c564b'  # brown
-    set style line 7 lw 2.5 lt 1 lc rgb '#e377c2'  # pink
-    set style line 8 lw 2.5 lt 1 lc rgb '#7f7f7f'  # grey
-    set style line 101 lc rgb '#808080' lt 1 lw 2
+    set style line 1 lw 2.5 lt 1 lc rgb '#66c2a5'   # teal
+    set style line 2 lw 2.5 lt 1 lc rgb '#fc8d62'   # orange
+    set style line 3 lw 2.5 lt 1 lc rgb '#8da0cb'   # blue-purple
+    set style line 4 lw 2.5 lt 1 lc rgb '#e78ac3'   # pink
+    set style line 5 lw 2.5 lt 1 lc rgb '#a6d854'   # green
+    set style line 6 lw 2.5 lt 1 lc rgb '#ffd92f'   # yellow
+    set style line 7 lw 2.5 lt 1 lc rgb '#e5c494'   # tan
+    set style line 8 lw 2.5 lt 1 lc rgb '#b3b3b3'   # grey
+    # set style line 101 lc rgb '#808080' lt 1 lw 2
+    set style line 101 lc rgb '#555555' lt 1 lw 2
     set border 3 front ls 101
-    set style line 102 lc rgb '#99808080' lt 1 lw 1
+
+    set style line 102 lc rgb '#DDDDDD' lt 1 lw 1
     set grid back ls 102
     set tics nomirror out scale 0.75
+    set xtics textcolor rgb '#444444'
     set format '%g'
     set samples 2000
     """
@@ -58,7 +62,7 @@ end
 apply_sg(vec) = savitzky_golay(vec, 7, 1).y
 logistic(x) = 1.0 / (1.0 + exp(-x))
 
-function read_province(name; plot_figs=false) 
+function read_province(name) 
     # unable to do: New Brunswick and Sask 
     # Newfoundland, PEI have slightly less data. 
     println("getting data for province: $name")
@@ -85,41 +89,31 @@ function read_province(name; plot_figs=false)
         @mutate(flu_sg = ~apply_sg(flu)) # the ~ means not to vectorize. 
         @mutate(rsv_sg = ~apply_sg(rsv)) # the ~ means not to vectorize.
     end    
-    
+
     # print the data
+    println("adjusted pop size: $(params_obj.popsize)")
     println("=== raw WW data for $name ===")
     println("Flu:  $(round.(df.flu_sg, digits=2))")
     println("Covid: $(round.(df.cov_sg, digits=2))")
     println("RSV:  $(round.(df.rsv_sg, digits=2))")
 
-    # # plot the data
-    if plot_figs
-        @gp "reset" 
-        @gp :- gp_config() :-
-        @gp :- "set multiplot layout 1, 3" :- # 1 row, 3 columns
-        @gp :- 1 1:nrow(df) df.covN2 "with lines notitle lt 0 lc rgb 'black'" :- 
-        @gp :- 2 1:nrow(df) df.flu "with lines notitle lt 0 lc rgb 'black'" :- 
-        @gp :- 3 1:nrow(df) df.rsv "with lines notitle lt 0 lc rgb 'black'" :- 
-        @gp :- 1 1:nrow(df) df.cov_sg "with lines notitle ls 1" :-
-        @gp :- 3 1:nrow(df) df.rsv_sg "with lines notitle ls 1" :- 
-        @gp :- 2 1:nrow(df) df.flu_sg "with lines notitle ls 1" :-
-        #Gnuplot.save("ww_all_prov.svg", term="svg enhanced size 900, 350 font 'Helvetica, 16'")
-        println("plot set, call using @gp in terminal to display.") 
-    end 
-    println("adjusted pop size: $(params_obj.popsize)")
-    # # print LOD week starts. We are assuming LOD < 1 is no signal. 
-    # # WW data is in weeks, so convert to days.
-    # lod_week_start_flu = find_emergence_week(df.flu_sg, 1.0) 
-    # lod_week_start_cov = find_emergence_week(df.cov_sg, 1.0)
-    # lod_week_start_rsv = find_emergence_week(df.rsv_sg, 1.0)
-    # println("LOD week start (threshold: 1.0): 
-    # flu: $lod_week_start_flu (in days: $(lod_week_start_flu * 7 - 6)), 
-    # covid: $lod_week_start_cov (in days: $(lod_week_start_cov * 7 - 6)), 
-    # rsv: $lod_week_start_rsv (in days: $(lod_week_start_rsv * 7 - 6))
-    #     Use information to set the correct wind-in period in province parameters")
-
-
     return df::DataFrame, params_obj
+end
+
+function plot_province(name) 
+     # # plot the data
+    df, _ = read_province(name)
+    @gp "reset" 
+    @gp :- gp_config() :-
+    @gp :- "set multiplot layout 1, 3" :- # 1 row, 3 columns
+    @gp :- 1 1:nrow(df) df.covN2 "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 2 1:nrow(df) df.flu "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 3 1:nrow(df) df.rsv "with lines notitle lt 0 lc rgb 'black'" :- 
+    @gp :- 1 1:nrow(df) df.cov_sg "with lines notitle ls 1" :-
+    @gp :- 3 1:nrow(df) df.rsv_sg "with lines notitle ls 1" :- 
+    @gp :- 2 1:nrow(df) df.flu_sg "with lines notitle ls 1" :-
+    #Gnuplot.save("ww_all_prov.svg", term="svg enhanced size 900, 350 font 'Helvetica, 16'")
+    println("plot set, call using @gp in terminal to display.") 
 end
 
 function hyperparameters(name)
@@ -543,7 +537,7 @@ function _optimize_ontario(iflu, icov, irsv, tflu, trsv)
     
     hp = hyperparameters("Ontario")
     _m1 = inference_model(obs_flu, obs_cov, obs_rsv, hp, province_params; nullmodel=false)
-    m1 = sample(_m1, NUTS(), 1000)  
+    m1 = sample(_m1, NUTS(), 4000)  
     save_chain(fname, m1)
     post_mat = chain_analysis(m1, "Ontario", plot_figs=false)
 
@@ -551,12 +545,7 @@ function _optimize_ontario(iflu, icov, irsv, tflu, trsv)
     flu_error = sum((vec(mean(post_mat.ww_flu, dims = 1)) - obs_flu).^2)
     cov_error = sum((vec(mean(post_mat.ww_cov, dims = 1)) - obs_cov).^2)
     rsv_error = sum((vec(mean(post_mat.ww_rsv, dims = 1)) - obs_rsv).^2)
-    # println("Sum of squared errors:
-    #             flu: $(round(flu_error, digits=2))
-    #             cov: $(round(cov_error, digits=2))
-    #             rsv: $(round(rsv_error, digits=2))")
-    println("fluerror:  $(flu_error)")
-    return flu_error 
+    return flu_error + cov_error + rsv_error
 end
 
 function optimize_ontario()
@@ -660,19 +649,19 @@ function chain_analysis(chain, name; plot_figs = true)
     samples = get(sample(chain, n_samples); section=:parameters)
     
     # empty matrices to store WW results
-    ww_cov_mat = zeros(n_samples, weeks)
-    ww_flu_mat = zeros(n_samples, weeks)
-    ww_rsv_mat = zeros(n_samples, weeks)
+    ww_cov = zeros(n_samples, weeks)
+    ww_flu = zeros(n_samples, weeks)
+    ww_rsv = zeros(n_samples, weeks)
 
     # empty matrices to store incidence results (in days)
-    inc_cov_mat = zeros(n_samples, weeks * 7 + 1) 
-    inc_flu_mat = zeros(n_samples, weeks * 7 + 1)
-    inc_rsv_mat = zeros(n_samples, weeks * 7 + 1)
+    inc_cov = zeros(n_samples, weeks * 7 + 1) 
+    inc_flu = zeros(n_samples, weeks * 7 + 1)
+    inc_rsv = zeros(n_samples, weeks * 7 + 1)
 
     # empty matrices to store prevalnece results (in days)
-    prev_cov_mat = zeros(n_samples, weeks * 7 + 1) 
-    prev_flu_mat = zeros(n_samples, weeks * 7 + 1)
-    prev_rsv_mat = zeros(n_samples, weeks * 7 + 1)
+    prev_cov = zeros(n_samples, weeks * 7 + 1) 
+    prev_flu = zeros(n_samples, weeks * 7 + 1)
+    prev_rsv = zeros(n_samples, weeks * 7 + 1)
 
     # see if theta is in the model (it won't be in the null model)
     mtype = Symbol("θ") in keys(chain)
@@ -728,71 +717,79 @@ function chain_analysis(chain, name; plot_figs = true)
         for w in 1:weeks
             idx_end = w * 7
             idx_end > size(Wc, 1) && continue
-            ww_cov_mat[i, w] = mean(Wc[idx_end-6:idx_end])
-            ww_flu_mat[i, w] = mean(Wf[idx_end-6:idx_end])
-            ww_rsv_mat[i, w] = mean(Wr[idx_end-6:idx_end])
+            ww_cov[i, w] = mean(Wc[idx_end-6:idx_end])
+            ww_flu[i, w] = mean(Wf[idx_end-6:idx_end])
+            ww_rsv[i, w] = mean(Wr[idx_end-6:idx_end])
         end
         
         # store prevalence results for this sample
-        prev_flu_mat[i, :] = sol[3, :]
-        prev_cov_mat[i, :] = sol[7, :]
-        prev_rsv_mat[i, :] = sol[11, :]
+        prev_flu[i, :] = sol[3, :]
+        prev_cov[i, :] = sol[7, :]
+        prev_rsv[i, :] = sol[11, :]
 
         #store incidence
-        inc_flu_mat[i, :] = Iᵢ
-        inc_cov_mat[i, :] = Iᵥ
-        inc_rsv_mat[i, :] = Iᵣ
+        inc_flu[i, :] = Iᵢ
+        inc_cov[i, :] = Iᵥ
+        inc_rsv[i, :] = Iᵣ
     end
 
     # print statistics
     println(chain)  # posteriors
-    calculate_reproduction_number(chain, immunity_flu, immunity_cov, immunity_rsv) # effective reproduction number 
+    
+    # the effective reproduction number needs to be correctly calculated.
+    #calculate_reproduction_number(chain, immunity_flu, immunity_cov, immunity_rsv) # effective reproduction number 
 
-    # print the main theta value   
+    # print the main theta and suppression values value   
     if mtype  
         meanθ, lowθ, highθ = round.((mean(vec(samples[:θ])), quantile(vec(samples[:θ]), 0.025), quantile(vec(samples[:θ]), 0.975)), digits=2)
-        println("\nTheta value (and Cr I) θ: $meanθ (95% Cr I: $lowθ, $highθ)")
+    else 
+        meanθ, lowθ, highθ = 0.0, 0.0, 0.0
     end
-
-    # temporal suppression calculation
-    _cov = vec(mean(prev_cov_mat, dims = 1))
-    _flu = vec(mean(prev_flu_mat, dims = 1))
-    _rsv = vec(mean(prev_rsv_mat, dims = 1))
-    θ_mean = mtype ? mean(samples[:θ]) : 0.0
-    supp_cov = [1 - exp(-θ_mean * (_flu[t] + _rsv[t])/popsize) for t in 1:days]
-    supp_rsv = [1 - exp(-θ_mean * (_flu[t] + _cov[t])/popsize) for t in 1:days]
-    supp_flu = [1 - exp(-θ_mean * (_cov[t] + _rsv[t])/popsize) for t in 1:days]
+    # calculate the suppression
+    _cov = vec(mean(prev_cov, dims = 1))
+    _flu = vec(mean(prev_flu, dims = 1))
+    _rsv = vec(mean(prev_rsv, dims = 1))
+    supp_cov_mean = round(maximum([1 - exp(-meanθ * (_flu[t] + _rsv[t])/popsize) for t in 1:days]), digits=2)
+    supp_rsv_mean = round(maximum([1 - exp(-meanθ * (_flu[t] + _cov[t])/popsize) for t in 1:days]), digits=2)
+    supp_flu_mean = round(maximum([1 - exp(-meanθ * (_cov[t] + _rsv[t])/popsize) for t in 1:days]), digits=2)
+    supp_cov_low = round(maximum([1 - exp(-lowθ * (_flu[t] + _rsv[t])/popsize) for t in 1:days]), digits=2)
+    supp_rsv_low = round(maximum([1 - exp(-lowθ * (_flu[t] + _cov[t])/popsize) for t in 1:days]), digits=2)
+    supp_flu_low = round(maximum([1 - exp(-lowθ * (_cov[t] + _rsv[t])/popsize) for t in 1:days]), digits=2)
+    supp_cov_high = round(maximum([1 - exp(-highθ * (_flu[t] + _rsv[t])/popsize) for t in 1:days]), digits=2)
+    supp_rsv_high = round(maximum([1 - exp(-highθ * (_flu[t] + _cov[t])/popsize) for t in 1:days]), digits=2)
+    supp_flu_high = round(maximum([1 - exp(-highθ * (_cov[t] + _rsv[t])/popsize) for t in 1:days]), digits=2)
+    println("\nTheta value (and Cr I) θ: $meanθ (95% Cr I: $lowθ, $highθ)")
     println("\nSuppression at peak: 
-                Flu: $(round(maximum(supp_flu), digits=2))
-                Covid: $(round(maximum(supp_cov), digits=2))
-                RSV: $(round(maximum(supp_rsv), digits=2))")
+    Flu: $(supp_flu_mean) (95% Cr I: $supp_flu_low, $supp_flu_high)
+    Covid: $(supp_cov_mean) (95% Cr I: $supp_cov_low, $supp_cov_high)
+    RSV: $(supp_rsv_mean) (95% Cr I: $supp_rsv_low, $supp_rsv_high)")
     
-    #final size:
-    println("Final size (in terms of percentage of eff population)
-                Flu: $(round(sum(vec(mean(inc_flu_mat, dims = 1))) / popsize * 100, digits=1))%
-                Covid: $(round(sum(vec(mean(inc_cov_mat, dims = 1))) / popsize * 100, digits=1))%
-                RSV: $(round(sum(vec(mean(inc_rsv_mat, dims = 1))) / popsize * 100, digits=1))%")
+    # #final size:
+    # println("Final size (in terms of percentage of eff population)
+    #     Flu: $(round(sum(vec(mean(inc_flu, dims = 1))) / popsize * 100, digits=1))%
+    #     Covid: $(round(sum(vec(mean(inc_cov, dims = 1))) / popsize * 100, digits=1))%
+    #     RSV: $(round(sum(vec(mean(inc_rsv, dims = 1))) / popsize * 100, digits=1))%")
     
     # Plot WW curves (not needed for the paper, but useful for checking model fit and visualizing the results)
     println("=== Wastewater signal (modelled vs observed) ===")
       #print the WW vectors 
     println("Flu vector: 
     observed: $(round.(obs_flu, digits=2))
-    modelled: $(round.(vec(mean(ww_flu_mat, dims = 1)), digits=2))
+    modelled: $(round.(vec(mean(ww_flu, dims = 1)), digits=2))
     ")
     println("Covid vector: 
     observed: $(round.(obs_cov, digits=2))
-    modelled: $(round.(vec(mean(ww_cov_mat, dims = 1)), digits=2))
+    modelled: $(round.(vec(mean(ww_cov, dims = 1)), digits=2))
     ")
     println("RSV vector: 
     observed: $(round.(obs_rsv, digits=2))
-    modelled: $(round.(vec(mean(ww_rsv_mat, dims = 1)), digits=2))
+    modelled: $(round.(vec(mean(ww_rsv, dims = 1)), digits=2))
     ")
 
     # Plot the posterior predictictions of the WW (this assesses the model fit to the data)
-    flu_model_peak_max, flu_model_peak_time = findmax(vec(mean(ww_flu_mat, dims = 1)))
-    cov_model_peak_max, cov_model_peak_time = findmax(vec(mean(ww_cov_mat, dims = 1)))
-    rsv_model_peak_max, rsv_model_peak_time = findmax(vec(mean(ww_rsv_mat, dims = 1)))
+    flu_model_peak_max, flu_model_peak_time = findmax(vec(mean(ww_flu, dims = 1)))
+    cov_model_peak_max, cov_model_peak_time = findmax(vec(mean(ww_cov, dims = 1)))
+    rsv_model_peak_max, rsv_model_peak_time = findmax(vec(mean(ww_rsv, dims = 1)))
     flu_sg_peak_max, flu_sg_peak_time = findmax(obs_flu) 
     cov_sg_peak_max, cov_sg_peak_time = findmax(obs_cov)
     rsv_sg_peak_max, rsv_sg_peak_time = findmax(obs_rsv)
@@ -800,9 +797,9 @@ function chain_analysis(chain, name; plot_figs = true)
     cov_orig_peak_max, cov_orig_peak_time = findmax(df.covN2)
     rsv_orig_peak_max, rsv_orig_peak_time = findmax(df.rsv)
     # Compute the errors from the observed data (this assesses the model fit to the data) 
-    flu_error = sum((vec(mean(ww_flu_mat, dims = 1)) - obs_flu).^2)
-    cov_error = sum((vec(mean(ww_cov_mat, dims = 1)) - obs_cov).^2)
-    rsv_error = sum((vec(mean(ww_rsv_mat, dims = 1)) - obs_rsv).^2)
+    flu_error = sum((vec(mean(ww_flu, dims = 1)) - obs_flu).^2)
+    cov_error = sum((vec(mean(ww_cov, dims = 1)) - obs_cov).^2)
+    rsv_error = sum((vec(mean(ww_rsv, dims = 1)) - obs_rsv).^2)
     
     # Calculate the times and magnitude at the peaks
     mat = [
@@ -817,7 +814,7 @@ function chain_analysis(chain, name; plot_figs = true)
 
     ## Print peak and timing of incidence curves
     inc_peak_matrix = Matrix{Any}(nothing, 0, 3) # 
-    for (inc_matrix, disease) in zip((inc_flu_mat, inc_cov_mat, inc_rsv_mat), ("Flu", "Covid", "RSV"))
+    for (inc_matrix, disease) in zip((inc_flu, inc_cov, inc_rsv), ("Flu", "Covid", "RSV"))
         m, lm, hm, tm, ltm, htm = _calc_stats(inc_matrix)
         inc_peak_matrix = vcat(inc_peak_matrix, [string(disease) "$m ($lm, $hm)" "$tm ($ltm, $htm)"])
     end
@@ -825,56 +822,51 @@ function chain_analysis(chain, name; plot_figs = true)
     pretty_table(inc_peak_matrix, backend=:text, column_labels = ["Disease", "Peak Magnitude (95% CI)", "Peak Timing (95% CI)"])
 
     if plot_figs
-    #plot the posteriors and trace plots 
-    @gp "reset"
-    @gp :- "set multiplot layout 3, 1" :-
-    @gp :- 1 1:weeks obs_flu "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
-    @gp :- 2 1:weeks obs_cov "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
-    @gp :- 3 1:weeks obs_rsv "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
-    @gp :- 1 1:weeks vec(mean(ww_flu_mat, dims = 1)) "with lines title 'Pred Flu' lw 2 lc rgb 'blue'" :-
-    @gp :- 2 1:weeks vec(mean(ww_cov_mat, dims = 1)) "with lines title 'Pred Covid' lw 2 lc rgb 'blue'" :-
-    @gp :- 3 1:weeks vec(mean(ww_rsv_mat, dims = 1)) "with lines title 'Pred RSV' lw 2 lc rgb 'blue'" :-
-    @gp :- 1 1:weeks obs_flu_raw "with lines title 'Obs Flu Raw' lw 2 lc rgb 'red'" :-
-    @gp :- 2 1:weeks obs_cov_raw "with lines title 'Obs Covid Raw' lw 2 lc rgb 'red'" :-
-    @gp :- 3 1:weeks obs_rsv_raw "with lines title 'Obs RSV Raw' lw 2 lc rgb 'red'" :-
-    #Gnuplot.save("outputs/predictive_wastewater.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
-    display(@gp)
+        #plot the posteriors and trace plots 
+        @gp "reset"
+        @gp :- "set multiplot layout 3, 1" :-
+        @gp :- 1 1:weeks obs_flu "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
+        @gp :- 2 1:weeks obs_cov "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
+        @gp :- 3 1:weeks obs_rsv "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
+        @gp :- 1 1:weeks vec(mean(ww_flu, dims = 1)) "with lines title 'Pred Flu' lw 2 lc rgb 'blue'" :-
+        @gp :- 2 1:weeks vec(mean(ww_cov, dims = 1)) "with lines title 'Pred Covid' lw 2 lc rgb 'blue'" :-
+        @gp :- 3 1:weeks vec(mean(ww_rsv, dims = 1)) "with lines title 'Pred RSV' lw 2 lc rgb 'blue'" :-
+        @gp :- 1 1:weeks obs_flu_raw "with lines title 'Obs Flu Raw' lw 2 lc rgb 'red'" :-
+        @gp :- 2 1:weeks obs_cov_raw "with lines title 'Obs Covid Raw' lw 2 lc rgb 'red'" :-
+        @gp :- 3 1:weeks obs_rsv_raw "with lines title 'Obs RSV Raw' lw 2 lc rgb 'red'" :-
+        #Gnuplot.save("outputs/predictive_wastewater.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+        display(@gp)
 
-    @gp "reset"
-    @gp :- "set multiplot layout 3, 1" :-
-    @gp :- 1 1:size(inc_flu_mat, 2) vec(mean(inc_flu_mat, dims = 1)) "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
-    @gp :- 2 1:size(inc_cov_mat, 2) vec(mean(inc_cov_mat, dims = 1)) "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
-    @gp :- 3 1:size(inc_rsv_mat, 2) vec(mean(inc_rsv_mat, dims = 1)) "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
-    #Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
-    display(@gp)
+        @gp "reset"
+        @gp :- "set multiplot layout 3, 1" :-
+        @gp :- 1 1:size(inc_flu, 2) vec(mean(inc_flu, dims = 1)) "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
+        @gp :- 2 1:size(inc_cov, 2) vec(mean(inc_cov, dims = 1)) "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
+        @gp :- 3 1:size(inc_rsv, 2) vec(mean(inc_rsv, dims = 1)) "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
+        #Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+        display(@gp)
 
-    @gp "reset"
-    @gp :- "set multiplot layout 3, 1" :-
-    @gp :- 1 1:size(inc_flu_mat, 2) cumsum(vec(mean(inc_flu_mat, dims = 1))) "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
-    @gp :- 2 1:size(inc_cov_mat, 2) cumsum(vec(mean(inc_cov_mat, dims = 1))) "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
-    @gp :- 3 1:size(inc_rsv_mat, 2) cumsum(vec(mean(inc_rsv_mat, dims = 1))) "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
-    #Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
-    display(@gp)
-
-    @gp "reset" 
-    @gp :- 1:days supp_flu "with lines title 'Flu Suppression' lw 2 lc rgb 'red'" :-
-    @gp :- 1:days supp_cov "with lines title 'Covid Suppression' lw 2 lc rgb 'blue'" :-
-    @gp :- 1:days supp_rsv "with lines title 'RSV Suppression' lw 2 lc rgb 'green'" :-
-    #Gnuplot.save("outputs/supressive_temporal.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
-    display(@gp)
+        @gp "reset"
+        @gp :- "set multiplot layout 3, 1" :-
+        @gp :- 1 1:size(inc_flu, 2) cumsum(vec(mean(inc_flu, dims = 1))) "with lines title 'Obs Flu' lw 3 lc rgb 'black'" :-
+        @gp :- 2 1:size(inc_cov, 2) cumsum(vec(mean(inc_cov, dims = 1))) "with lines title 'Obs Covid' lw 3 lc rgb 'black'" :-
+        @gp :- 3 1:size(inc_rsv, 2) cumsum(vec(mean(inc_rsv, dims = 1))) "with lines title 'Obs RSV' lw 3 lc rgb 'black'" :-
+        #Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
+        display(@gp)
     end 
     # return the posterior predictive matrices for further analysis if needed
-    return (inc_flu = inc_flu_mat, inc_cov = inc_cov_mat, inc_rsv = inc_rsv_mat,
-            prev_flu = prev_flu_mat, prev_cov = prev_cov_mat, prev_rsv = prev_rsv_mat,
-            ww_flu = ww_flu_mat, ww_cov = ww_cov_mat, ww_rsv = ww_rsv_mat)
+    return (; inc_flu, inc_cov, inc_rsv,
+            prev_flu, prev_cov, prev_rsv,
+            ww_flu, ww_cov, ww_rsv, 
+            meanθ, lowθ, highθ,
+            supp_flu_mean, supp_cov_mean, supp_rsv_mean,
+            supp_flu_low, supp_cov_low, supp_rsv_low,
+            supp_flu_high, supp_cov_high, supp_rsv_high)
 end
 
-function full_analysis() 
-    ## WIP 
-    # for manuscript, plot all wastewater data together to show the patterns across diseases.
+function run_analysis_all_prov() 
+    # runs the chain analysis for all provinces and saves the results to a log file (this is useful for checking the results and for generating summary tables of the results across provinces)
     provs = ["British Columbia", "Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec"]
-    
-    open("outputs/test_output.log", "w") do io
+    open("outputs/main_results.log", "w") do io
         redirect_stdout(io) do
             for prov in provs
                 m1 = read_chain("outputs/chain_$(prov)_m1.jls")
@@ -886,11 +878,85 @@ function full_analysis()
     end
 end
 
-function plot_both(name)
-  m1 = read_chain("outputs/chain_$(name)_m1.jls")
-chain_analysis(m1, name, plot_figs = true)
-m0 = read_chain("outputs/chain_$(name)_null.jls")
-chain_analysis(m0, name, plot_figs = true) 
+function plot_wastewater_signal() 
+    # figure for appendix 
+    # panel of 6 (3 x 3), with the observed wastewater signal for flu, covid, and rsv across the 6 provinces.
+    provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec", "British Columbia"]
+    @gp "reset"
+    @gp :- gp_config() :-
+    @gp :- "set multiplot layout 6, 3" :-
+    @gp :- "set label 101 'Alberta' at screen 0.075, 1.00-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 102 'Ontario' at screen 0.075, 0.8333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 103 'Manitoba' at screen 0.075, 0.6667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 104 'Nova Scotia' at screen 0.075, 0.5000-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 105 'Quebec' at screen 0.075, 0.3333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 106 'British Columbia' at screen 0.075, 0.1667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set tmargin 2" :-
+    for (prov, i) in zip(provs, 1:3:18)
+        println(i)
+        df, _ = read_province(prov)
+        m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+        chain = chain_analysis(m1, prov, plot_figs = false)
+
+        m0 = read_chain("outputs/chain_$(prov)_null.jls")
+        chain_null = chain_analysis(m0, prov, plot_figs = false)
+
+        obs_flu = df.flu
+        obs_cov = df.covN2
+        obs_rsv = df.rsv
+        #@gp :- "set nokey" :-
+        @gp :- i 1:length(obs_flu) obs_flu "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- (i+1) 1:length(obs_cov) obs_cov "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- (i+2) 1:length(obs_rsv) obs_rsv "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- i 1:length(obs_flu) vec(mean(chain.ww_flu, dims = 1)) "smooth csplines with lines title 'Modelled Flu' ls 1" :-
+        @gp :- (i+1) 1:length(obs_cov) vec(mean(chain.ww_cov, dims = 1)) "smooth csplines with lines title 'Modelled Covid' ls 2" :-
+        @gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain.ww_rsv, dims = 1)) "smooth csplines with lines title 'Modelled RSV' ls 3" :- 
+
+        @gp :- i 1:length(obs_flu) vec(mean(chain_null.ww_flu, dims = 1)) "smooth csplines with lines title 'M0 Flu' ls 4" :-
+        @gp :- (i+1) 1:length(obs_cov) vec(mean(chain_null.ww_cov, dims = 1)) "smooth csplines with lines title 'M0 Covid' ls 5" :-
+        @gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain_null.ww_rsv, dims = 1)) "smooth csplines with lines title 'M0 RSV' ls 6" :- 
+    end
+    Gnuplot.save("outputs/wastewater_fits.pdf", term="pdfcairo enhanced size 6in,9in font 'Helvetica, 12'")
+    @gp 
+end
+
+function plot_theta_and_suppression()
+    provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec", "British Columbia"]
+    main_table = Matrix{Any}(nothing, 0, 5) # 
+
+    # i don't know if making whisker plots make sense here 
+    # it shows a 'trend' (unless we put provinces on the y-axis)
+
+    #return chain.supp_flu_mean
+    # plot the data in two figures
+    # @gp "reset"
+    # @gp :- "set multiplot layout 1, 2" :-
+    # @gp :- gp_config() :-
+    # @gp :- "set style data boxplot" :-
+    # @gp :- "set style boxplot nooutliers" :-
+    # @gp :- "set boxwidth 0.8 relative" :-
+    # @gp :- "set style fill transparent solid 0.35 noborder" :-
+    # @gp :- "set bars 2.0" :-    # very large caps
+    # @gp :- "set tics textcolor rgb '#444444' font 'Helvetica,12'" :-
+    # @gp :- "set pointsize 0.8"             # small point
+    
+    for (i, prov) in enumerate(provs)
+        m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+        chain = chain_analysis(m1, prov, plot_figs = false)
+        θstr = Printf.@sprintf("%.2f (%.2f–%.2f)", chain.meanθ, chain.lowθ, chain.highθ)
+        fstr = Printf.@sprintf("%.0f%% (%.0f–%.0f%%)", chain.supp_flu_mean * 100, chain.supp_flu_low * 100, chain.supp_flu_high * 100)
+        cstr = Printf.@sprintf("%.0f%% (%.0f–%.0f%%)", chain.supp_cov_mean * 100, chain.supp_cov_low * 100, chain.supp_cov_high * 100)
+        rstr = Printf.@sprintf("%.0f%% (%.0f–%.0f%%)", chain.supp_rsv_mean * 100, chain.supp_rsv_low * 100, chain.supp_rsv_high * 100)
+        row = [prov θstr fstr cstr rstr]
+        main_table = vcat(main_table, row)
+        # @gp :- 1 [i*2] [chain.supp_flu_mean] [chain.supp_flu_low] [chain.supp_flu_high] "with errorbars notitle ls 1 lw 2 pt 7" :-
+        # @gp :- 1 [i*2-0.35] [chain.supp_cov_mean] [chain.supp_cov_low] [chain.supp_cov_high] "with errorbars notitle ls 2 lw 2 pt 7" :-
+        # @gp :- 1 [i*2+0.35] [chain.supp_rsv_mean] [chain.supp_rsv_low] [chain.supp_rsv_high] "with errorbars notitle ls 3 lw 2 pt 7" :-
+    end
+
+    return pretty_table(main_table, backend=:markdown, 
+        column_labels = ["Province", "Theta (95% CI)", "Flu", "Covid", "RSV"],
+        alignment = [:l, :c, :c, :c, :c])
 end
 
 function plot_shedding_kernels() 
@@ -902,14 +968,86 @@ function plot_shedding_kernels()
     #@gp :- "set key width 2" :-
     #@gp :- "set key height 1" :-
     @gp :- "set xtics 1" :- 
-    @gp :- "set key opaque" :- 
+    @gp :- "set key noopaque" :- 
     @gp :- "set key Left reverse" :- 
-    @gp :- 1:length(K_FLU) K_FLU "smooth csplines with lines title 'Flu' ls 1" :-
-    @gp :- 1:length(K_COV) K_COV "smooth csplines with lines title 'Covid' ls 2" :-
+    @gp :- 1:length(K_FLU) K_FLU "smooth csplines with lines title 'Influenza' ls 1" :-
+    @gp :- 1:length(K_COV) K_COV "smooth csplines with lines title 'SARS-CoV-2' ls 2" :-
     @gp :- 1:length(K_RSV) K_RSV "smooth csplines with lines title 'RSV' ls 3" :-
     Gnuplot.save("outputs/shedding_kernels.svg", term="svg enhanced size 1000, 400 font 'Helvetica, 16'")
+    Gnuplot.save("outputs/shedding_kernels.pdf", term="pdfcairo enhanced size 5in,2in font 'Helvetica, 12'")
     println("plot set, call using @gp in terminal to display.")
     @gp
+end
+
+function plot_incidence_curves() 
+    provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec", "British Columbia"]
+    @gp "reset"
+    @gp :- gp_config() :-
+    @gp :- "set multiplot layout 6, 3" :-
+    @gp :- "set label 101 'Alberta' at screen 0.075, 1.00-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 102 'Ontario' at screen 0.075, 0.8333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 103 'Manitoba' at screen 0.075, 0.6667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 104 'Nova Scotia' at screen 0.075, 0.5000-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 105 'Quebec' at screen 0.075, 0.3333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 106 'British Columbia' at screen 0.075, 0.1667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set tmargin 2" :-
+    @gp :- "set style fill transparent solid 0.35 noborder" :-
+
+    @gp :- "unset xtics" :-
+    # for i = 1:52
+    #     @gp :- "set xtics add ($i $(7*i))" :-
+    # end
+    #@gp :- "set xtics ('Week 1' 52)" :-
+    #@gp :- "set xtics 14" :-
+    #@gp :- "set xtics format '%g'" :-
+
+    tf = ((8*7)+1):421  # gives me 365 days, 8 weeks of wind-in
+    for (prov, i) in zip(provs, 1:3:18)
+        _m0 = read_chain("outputs/chain_$(prov)_null.jls")
+        _m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+        m0 = chain_analysis(_m0, prov, plot_figs = false)
+        m1 = chain_analysis(_m1, prov, plot_figs = false)
+
+        mean_inc_flu_m0 = vec(mean(m0.inc_flu[:, tf], dims = 1))
+        lo_inc_flu_m0 = [quantile(col, 0.05) for col in eachcol(m0.inc_flu[:, tf])]
+        hi_inc_flu_m0 = [quantile(col, 0.975) for col in eachcol(m0.inc_flu[:, tf])]
+        mean_inc_flu = vec(mean(m1.inc_flu[:, tf], dims = 1))
+        lo_inc_flu = [quantile(col, 0.05) for col in eachcol(m1.inc_flu[:, tf])]
+        hi_inc_flu = [quantile(col, 0.975) for col in eachcol(m1.inc_flu[:, tf])]
+
+        mean_inc_cov_m0 = vec(mean(m0.inc_cov[:, tf], dims = 1))
+        lo_inc_cov_m0 = [quantile(col, 0.05) for col in eachcol(m0.inc_cov[:, tf])]
+        hi_inc_cov_m0 = [quantile(col, 0.975) for col in eachcol(m0.inc_cov[:, tf])]
+        mean_inc_cov = vec(mean(m1.inc_cov[:, tf], dims = 1))
+        lo_inc_cov = [quantile(col, 0.05) for col in eachcol(m1.inc_cov[:, tf])]
+        hi_inc_cov = [quantile(col, 0.975) for col in eachcol(m1.inc_cov[:, tf])]
+
+        mean_inc_rsv_m0 = vec(mean(m0.inc_rsv[:, tf], dims = 1))
+        lo_inc_rsv_m0 = [quantile(col, 0.05) for col in eachcol(m0.inc_rsv[:, tf])]
+        hi_inc_rsv_m0 = [quantile(col, 0.975) for col in eachcol(m0.inc_rsv[:, tf])]
+        mean_inc_rsv = vec(mean(m1.inc_rsv[:, tf], dims = 1))
+        lo_inc_rsv = [quantile(col, 0.05) for col in eachcol(m1.inc_rsv[:, tf])]
+        hi_inc_rsv = [quantile(col, 0.975) for col in eachcol(m1.inc_rsv[:, tf])]
+        
+        xn = length(mean_inc_flu)   
+        @gp :- i 1:xn lo_inc_flu hi_inc_flu "with filledcurves notitle ls 1" :-
+        @gp :- i 1:xn mean_inc_flu "with lines title 'M1' ls 1" :-
+        @gp :- i 1:xn lo_inc_flu_m0 hi_inc_flu_m0 "with filledcurves notitle ls 2" :-
+        @gp :- i 1:xn mean_inc_flu_m0 "with lines title 'M0' ls 2" :-
+        
+        @gp :- (i+1) 1:xn lo_inc_cov hi_inc_cov "with filledcurves notitle ls 1" :-
+        @gp :- (i+1) 1:xn mean_inc_cov "with lines title 'M1' ls 1" :-
+        @gp :- (i+1) 1:xn lo_inc_cov_m0 hi_inc_cov_m0 "with filledcurves notitle ls 2" :-
+        @gp :- (i+1) 1:xn mean_inc_cov_m0 "with lines title 'M0' ls 2" :-
+
+        @gp :- (i+2) 1:xn lo_inc_rsv hi_inc_rsv "with filledcurves notitle ls 1" :-
+        @gp :- (i+2) 1:xn mean_inc_rsv "with lines title 'M1' ls 1" :-
+        @gp :- (i+2) 1:xn lo_inc_rsv_m0 hi_inc_rsv_m0 "with filledcurves notitle ls 2" :-
+        @gp :- (i+2) 1:xn mean_inc_rsv_m0 "with lines title 'M0' ls 2" :-
+    end
+    Gnuplot.save("outputs/incidence_curves.pdf", term="pdfcairo enhanced size 6in,9in font 'Helvetica, 12'")
+    @gp
+
 end
 
 function solve_seir_model() 
