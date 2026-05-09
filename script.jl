@@ -6,7 +6,7 @@ using MCMCChains, KernelDensity
 using SavitzkyGolay # filter
 using Gnuplot, PrettyTables, TerminalPager, GarishPrint
 using Dates, Parameters, Configurations, Match, JSON
-using Serialization, Hyperopt
+using Serialization, Hyperopt, Printf
 
 Gnuplot.options.term = "sixelgd truecolor enhanced size 900,450 scroll font Arial 12"
 # when adding new packages, avoid precompilation by
@@ -119,6 +119,12 @@ end
 function hyperparameters(name)
     _, params = read_province(name) 
 
+    # school timing priors are province-specific in center (from TOML)
+    # but share the same uncertainty structure across provinces.
+    _t_sch_flu = truncated(Normal(100, 14.0), 100 - 28.0, 100 + 28.0)
+    _t_sch_cov = truncated(Normal(150, 10.0), 150 - 21.0, 150 + 21.0)
+    _t_sch_rsv = truncated(Normal(100, 10.0), 100 - 21.0, 100 + 21.0)
+
     @match name begin
     "Ontario" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
@@ -130,9 +136,12 @@ function hyperparameters(name)
     #i0c = truncated(Normal(200.0, 500.0), 10.0, params.popsize * 0.05),
     i0c = truncated(Normal(2000.0, 500.0), 500.0, params.popsize * 0.05),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
-    #ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
-    ε_cov = truncated(Exponential(1.0), 0.0, 0.1),
-    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
+    ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
+    #ε_cov = truncated(Exponential(1.0), 0.0, 0.1),
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0),
+    t_sch_flu = _t_sch_flu,
+    t_sch_cov = _t_sch_cov,
+    t_sch_rsv = _t_sch_rsv
     )
     "British Columbia" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
@@ -146,7 +155,10 @@ function hyperparameters(name)
     i0c = truncated(Normal(2000.0, 800.0), 500.0, params.popsize * 0.10),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
     ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
-    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0),
+    t_sch_flu = _t_sch_flu,
+    t_sch_cov = _t_sch_cov,
+    t_sch_rsv = _t_sch_rsv
     )
     "Alberta" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
@@ -158,7 +170,10 @@ function hyperparameters(name)
     i0c = truncated(Normal(300.0, 150.0), 50.0, 2000.0),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
     ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
-    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0),
+    t_sch_flu = _t_sch_flu,
+    t_sch_cov = _t_sch_cov,
+    t_sch_rsv = _t_sch_rsv
     )
     "Manitoba" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
@@ -170,7 +185,10 @@ function hyperparameters(name)
     i0c     = truncated(Normal(800.0, 200.0), 100.0, params.popsize * 0.10),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
     ε_cov = truncated(Exponential(0.05), 0.0, 0.1),
-    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0),
+    t_sch_flu = _t_sch_flu,
+    t_sch_cov = _t_sch_cov,
+    t_sch_rsv = _t_sch_rsv
     )
     "Quebec" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
@@ -182,7 +200,10 @@ function hyperparameters(name)
     i0c = truncated(Normal(3000.0, 500.0), 500.0, params.popsize * 0.05),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
     ε_cov = truncated(Exponential(5.0), 1.0, 40.0), # quebec
-    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0),
+    t_sch_flu = _t_sch_flu,
+    t_sch_cov = _t_sch_cov,
+    t_sch_rsv = _t_sch_rsv
     )
     "Nova Scotia" => (
     βᵢ_base = truncated(Normal(0.35, 0.10), 0.15, 0.42),
@@ -195,7 +216,10 @@ function hyperparameters(name)
     #ε_cov   = truncated(Exponential(0.05), 0.0, 0.08),
     ε_cov   = truncated(Exponential(1.0), 0.0, 0.08),
     ε_flu = truncated(Exponential(1.0), 0.1, 5.0),
-    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0)
+    ε_rsv = truncated(Exponential(3.0), 0.5, 10.0),
+    t_sch_flu = _t_sch_flu,
+    t_sch_cov = _t_sch_cov,
+    t_sch_rsv = _t_sch_rsv
     )
     _ => error("Province '$name' not found")
     end
@@ -399,9 +423,12 @@ end
     ε_cov ~ hyperparams.ε_cov
     ε_rsv ~ hyperparams.ε_rsv
 
+    t_sch_flu ~ hyperparams.t_sch_flu 
+    t_sch_cov ~ hyperparams.t_sch_cov 
+    t_sch_rsv ~ hyperparams.t_sch_rsv
     params = [βᵢ_base, βᵢ_peak, βᵥ_base, βᵥ_peak, βᵣ_base, βᵣ_peak, 
         θ, popsize, ε_flu, ε_cov, ε_rsv,
-        t_school_flu, t_school_cov, t_school_rsv]
+        t_sch_flu, t_sch_cov, t_sch_rsv]
    
     # solve the ODE 
     prob = ODEProblem(sym_defn_ode, initial_cond, tspan, params)
@@ -491,6 +518,29 @@ function run_inference(name, m0_or_m1)
     return chains
 end 
 
+function test_ad() 
+    # this function just tested whether Reverse mode or Forward mode AD is faster 
+    # Reverse mode only when n parameters > 50, 100 (i.e., large number of parameters)
+    # requires Mooncake (reverse diff), SciMLSensitivity, and DynamicPPL.TestUtils.AD
+    # Reversediff does not work with ODE - known problem. 
+    name = "Ontario"
+    df, province_params = read_province(name) 
+    obs_flu = df.flu_sg
+    obs_covid = df.cov_sg
+    obs_rsv = df.rsv_sg
+    @assert length(df.flu_sg) == length(df.cov_sg) == length(df.rsv_sg)
+    hp = hyperparameters(name)
+    _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=false)
+    
+    # needs using DynamicPPL.TestUtils.AD: run_ad, ADResult
+    # using Mooncake, SciMLSensitivity
+    println("measuring time") # needs using DynamicPPL.TestUtils.AD: run_ad, ADResult
+    for adtype in [AutoForwardDiff(), AutoMooncake()]
+        result = run_ad(_m1, adtype; benchmark=true)
+        @show result.grad_time / result.primal_time
+    end
+end
+
 function save_chain(filename, chain)
     # can save as a serialized file
     Serialization.serialize(filename, chain)
@@ -564,43 +614,6 @@ function optimize_ontario()
 end
 
 #### POST HOC - ANALYSIS FUNCTIONS
-function calculate_reproduction_number(chain, immunity_flu, immunity_cov, immunity_rsv)
-    # R0_bio = β / γ
-    # R_eff = R0_bio * (1 - immunity)
-    # return R0_bio, R_eff
-     # calculating beta -> reproduction numbers (simple estimate) 
-    # extract posterior means for base and peak betas
-    βᵢ_base = mean(chain[:, :βᵢ_base, :])
-    βᵢ_peak = mean(chain[:, :βᵢ_peak, :])
-    βᵥ_base = mean(chain[:, :βᵥ_base, :])
-    βᵥ_peak = mean(chain[:, :βᵥ_peak, :])
-    βᵣ_base = mean(chain[:, :βᵣ_base, :])
-    βᵣ_peak = mean(chain[:, :βᵣ_peak, :])
-
-    γᵢ = 1/4.0
-    γᵥ = 1/5.0
-    γᵣ = 1/5.0 
-
-    # biological R0 = β / γ (in fully susceptible population)
-    # effective R = R0_bio × (1 - immunity) = β / γ × S(0)/N
-
-    println("=== Influenza ===")
-    println("  Pre-school:  R0_bio=$(round(βᵢ_base/γᵢ, digits=2)),  R_eff=$(round(βᵢ_base/γᵢ*(1-immunity_flu), digits=2))")
-    println("  Post-school: R0_bio=$(round(βᵢ_peak/γᵢ, digits=2)),  R_eff=$(round(βᵢ_peak/γᵢ*(1-immunity_flu), digits=2))")
-    println("  Expected R_eff range: pre < 1.0 (sub-threshold), post 1.5-2.5")
-
-    println("=== COVID ===")
-    println("  Pre-school:  R0_bio=$(round(βᵥ_base/γᵥ, digits=2)),  R_eff=$(round(βᵥ_base/γᵥ*(1-immunity_cov), digits=2))")
-    println("  Post-school: R0_bio=$(round(βᵥ_peak/γᵥ, digits=2)),  R_eff=$(round(βᵥ_peak/γᵥ*(1-immunity_cov), digits=2))")
-    println("  Expected R_eff range: pre ~1.0-1.2, post ~1.3-1.8")
-
-    println("=== RSV ===")
-    println("  Pre-school:  R0_bio=$(round(βᵣ_base/γᵣ, digits=2)),  R_eff=$(round(βᵣ_base/γᵣ*(1-immunity_rsv), digits=2))")
-    println("  Post-school: R0_bio=$(round(βᵣ_peak/γᵣ, digits=2)),  R_eff=$(round(βᵣ_peak/γᵣ*(1-immunity_rsv), digits=2))")
-    println("  Expected R_eff range: pre ~0.8-1.1, post ~1.5-2.0")
-end
-
-
 # given an incidence matrix (samples x time), calculate the mean, 95% credible interval for the peak magnitude, and the mean peak timing.
 function _calc_stats(inc_mat)
     max_magnitudes, max_times = findmax(inc_mat, dims=2)
@@ -613,6 +626,17 @@ function _calc_stats(inc_mat)
     high_time = round(Int, quantile(vec([e[2] / 7 for e in max_times]), 0.975)) # since e.g. e = CartesianIndex(2, 168)
     return mean_magnitude, low_magnitude, high_magnitude, 
             mean_time, low_time, high_time
+end
+
+function _calculate_Rt(t, t_school, beta_base, beta_peak, N, S, P1, P2, θ)
+    # internal function to be called from chain_analysis() 
+    γᵢ = 1/4.0
+    tl = @. logistic((t - t_school)/7) # tl is vector
+    βt = @. beta_base + (beta_peak - beta_base) * tl
+    S_frac = S / N
+    interference =  exp.(-θ .* (P1 .+ P2) ./ N )
+    rt =  @. βt / γᵢ * S_frac * interference    
+    return rt
 end
 
 function chain_analysis(chain, name; plot_figs = true)
@@ -663,6 +687,16 @@ function chain_analysis(chain, name; plot_figs = true)
     prev_flu = zeros(n_samples, weeks * 7 + 1)
     prev_rsv = zeros(n_samples, weeks * 7 + 1)
 
+    # effective reproduction number
+    Rt_flu = zeros(n_samples, weeks * 7 + 1)
+    Rt_cov = zeros(n_samples, weeks * 7 + 1)
+    Rt_rsv = zeros(n_samples, weeks * 7 + 1)
+
+    # counterfactual (i.e., theta = 0 but not the NULL model)
+    Rt_flu_cf = zeros(n_samples, weeks * 7 + 1)
+    Rt_cov_cf = zeros(n_samples, weeks * 7 + 1)
+    Rt_rsv_cf = zeros(n_samples, weeks * 7 + 1)
+
     # see if theta is in the model (it won't be in the null model)
     mtype = Symbol("θ") in keys(chain)
     mtype ? println("Model includes θ (cross-immunity factor)") : println("Model is the NULL, does NOT include θ (null model)")
@@ -685,6 +719,9 @@ function chain_analysis(chain, name; plot_figs = true)
         i0c = samples[:i0c][i] 
         i0r = 1
         i0i = 1
+        t_school_cov = samples[:t_sch_cov][i]
+        t_school_flu = samples[:t_sch_flu][i]
+        t_school_rsv = samples[:t_sch_rsv][i]
 
         # get initial conditions
         s0i = (1.0 - immunity_flu) * popsize
@@ -704,12 +741,19 @@ function chain_analysis(chain, name; plot_figs = true)
         tspan  = (0.0, Float64(weeks * 7))
         prob   = ODEProblem(sym_defn_ode, u₀, tspan, params)
         sol    = solve(prob, Tsit5(), saveat=1.0)
-        
+    
+        Sᵢ = sol[1, :]
+        Sᵥ = sol[5, :]
+        Sᵣ = sol[9, :]
+
+        Pᵢ = sol[3, :]
+        Pᵥ = sol[7, :]
+        Pᵣ = sol[11, :]
+
         Iᵢ = make_incidence(sol[13, :])
         Iᵥ = make_incidence(sol[14, :])
         Iᵣ = make_incidence(sol[15, :])
-        
-        
+                
         Wf = sym_convolve_seir(Iᵢ ./ popsize, K_FLU) * M_f
         Wc = sym_convolve_seir(Iᵥ ./ popsize, K_COV) * M_c
         Wr = sym_convolve_seir(Iᵣ ./ popsize, K_RSV) * M_r
@@ -721,23 +765,30 @@ function chain_analysis(chain, name; plot_figs = true)
             ww_flu[i, w] = mean(Wf[idx_end-6:idx_end])
             ww_rsv[i, w] = mean(Wr[idx_end-6:idx_end])
         end
-        
-        # store prevalence results for this sample
-        prev_flu[i, :] = sol[3, :]
-        prev_cov[i, :] = sol[7, :]
-        prev_rsv[i, :] = sol[11, :]
 
+        # store prevalence results for this sample
+        prev_flu[i, :] = Pᵢ
+        prev_cov[i, :] = Pᵥ
+        prev_rsv[i, :] = Pᵣ
+  
         #store incidence
         inc_flu[i, :] = Iᵢ
         inc_cov[i, :] = Iᵥ
         inc_rsv[i, :] = Iᵣ
+
+        # calculate Rt (make sure to send correct prevalence for each virus (so cov, rsv for flu etc))
+        Rt_flu[i, :] = _calculate_Rt(sol.t, t_school_flu, βᵢ_base, βᵢ_peak, popsize, Sᵢ, Pᵥ, Pᵣ, θ)
+        Rt_cov[i, :] = _calculate_Rt(sol.t, t_school_cov, βᵥ_base, βᵥ_peak, popsize, Sᵥ, Pᵢ, Pᵣ, θ)
+        Rt_rsv[i, :] = _calculate_Rt(sol.t, t_school_rsv, βᵣ_base, βᵣ_peak, popsize, Sᵣ, Pᵢ, Pᵥ, θ)
+
+        # calculate Rt counterfactual (theta = 0, but not NULL model so other parameters are the same) 
+        Rt_flu_cf[i, :] = _calculate_Rt(sol.t, t_school_flu, βᵢ_base, βᵢ_peak, popsize, Sᵢ, Pᵥ, Pᵣ, 0)
+        Rt_cov_cf[i, :] = _calculate_Rt(sol.t, t_school_cov, βᵥ_base, βᵥ_peak, popsize, Sᵥ, Pᵢ, Pᵣ, 0)
+        Rt_rsv_cf[i, :] = _calculate_Rt(sol.t, t_school_rsv, βᵣ_base, βᵣ_peak, popsize, Sᵣ, Pᵢ, Pᵥ, 0)
     end
 
     # print statistics
-    println(chain)  # posteriors
-    
-    # the effective reproduction number needs to be correctly calculated.
-    #calculate_reproduction_number(chain, immunity_flu, immunity_cov, immunity_rsv) # effective reproduction number 
+    describe(chain)  # posteriors
 
     # print the main theta and suppression values value   
     if mtype  
@@ -745,6 +796,7 @@ function chain_analysis(chain, name; plot_figs = true)
     else 
         meanθ, lowθ, highθ = 0.0, 0.0, 0.0
     end
+
     # calculate the suppression
     _cov = vec(mean(prev_cov, dims = 1))
     _flu = vec(mean(prev_flu, dims = 1))
@@ -762,13 +814,46 @@ function chain_analysis(chain, name; plot_figs = true)
     println("\nSuppression at peak: 
     Flu: $(supp_flu_mean) (95% Cr I: $supp_flu_low, $supp_flu_high)
     Covid: $(supp_cov_mean) (95% Cr I: $supp_cov_low, $supp_cov_high)
-    RSV: $(supp_rsv_mean) (95% Cr I: $supp_rsv_low, $supp_rsv_high)")
+    RSV: $(supp_rsv_mean) (95% Cr I: $supp_rsv_low, $supp_rsv_high)")    
+
+    # calculate the Rt means 
+    Rt_flu_mean = round(maximum(vec(mean(Rt_flu, dims = 1))), digits=2)
+    Rt_cov_mean = round(maximum(vec(mean(Rt_cov, dims = 1))), digits=2)
+    Rt_rsv_mean = round(maximum(vec(mean(Rt_rsv, dims = 1))), digits=2)
+    Rt_flu_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_flu)]), digits=2)
+    Rt_cov_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_cov)]), digits=2)
+    Rt_rsv_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_rsv)]), digits=2)
+    Rt_flu_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_flu)]), digits=2)
+    Rt_cov_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_cov)]), digits=2)
+    Rt_rsv_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_rsv)]), digits=2)
+
+    # counterfactual Rt Means
+    Rt_cf_flu_mean = round(maximum(vec(mean(Rt_flu_cf, dims = 1))), digits=2)
+    Rt_cf_cov_mean = round(maximum(vec(mean(Rt_cov_cf, dims = 1))), digits=2)
+    Rt_cf_rsv_mean = round(maximum(vec(mean(Rt_rsv_cf, dims = 1))), digits=2)
+    Rt_cf_flu_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_flu_cf)]), digits=2)
+    Rt_cf_cov_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_cov_cf)]), digits=2)
+    Rt_cf_rsv_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_rsv_cf)]), digits=2)
+    Rt_cf_flu_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_flu_cf)]), digits=2)
+    Rt_cf_cov_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_cov_cf)]), digits=2)
+    Rt_cf_rsv_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_rsv_cf)]), digits=2)
+
     
-    # #final size:
-    # println("Final size (in terms of percentage of eff population)
-    #     Flu: $(round(sum(vec(mean(inc_flu, dims = 1))) / popsize * 100, digits=1))%
-    #     Covid: $(round(sum(vec(mean(inc_cov, dims = 1))) / popsize * 100, digits=1))%
-    #     RSV: $(round(sum(vec(mean(inc_rsv, dims = 1))) / popsize * 100, digits=1))%")
+    println("Effective reproduction number (Rt) at peak:
+    Flu: counterfactual Rt: $(Rt_cf_flu_mean) (95% quantile: $Rt_cf_flu_low, $Rt_cf_flu_high), with theta Rt: $(Rt_flu_mean) Quantile($Rt_flu_low to $Rt_flu_high)
+    Covid: counterfactual Rt: $(Rt_cf_cov_mean) (95% quantile: $Rt_cf_cov_low, $Rt_cf_cov_high), with theta Rt: $(Rt_cov_mean) Quantile($Rt_cov_low to $Rt_cov_high)
+    RSV: counterfactual Rt: $(Rt_cf_rsv_mean) (95% quantile: $Rt_cf_rsv_low, $Rt_cf_rsv_high), with theta Rt: $(Rt_rsv_mean) Quantile($Rt_rsv_low to $Rt_rsv_high)")
+
+    # rope suppression
+    if mtype
+        rope_flu = rope_suppression(samples, prev_cov, prev_rsv, popsize)
+        rope_cov = rope_suppression(samples, prev_flu, prev_rsv, popsize)
+        rope_rsv = rope_suppression(samples, prev_flu, prev_cov, popsize)
+        println("\nROPE suppression (proportion of posterior distribution where suppression < 10%):
+        Flu: $(round(rope_flu, digits=2))
+        Covid: $(round(rope_cov, digits=2))
+        RSV: $(round(rope_rsv, digits=2))")
+    end
     
     # Plot WW curves (not needed for the paper, but useful for checking model fit and visualizing the results)
     println("=== Wastewater signal (modelled vs observed) ===")
@@ -860,17 +945,33 @@ function chain_analysis(chain, name; plot_figs = true)
             meanθ, lowθ, highθ,
             supp_flu_mean, supp_cov_mean, supp_rsv_mean,
             supp_flu_low, supp_cov_low, supp_rsv_low,
-            supp_flu_high, supp_cov_high, supp_rsv_high)
+            supp_flu_high, supp_cov_high, supp_rsv_high, Rt_flu, Rt_cov, Rt_rsv)
+end
+
+function rope_suppression(samples, prev_a, prev_b, popsize; threshold=0.10)
+    n_draws = length(samples[:θ])
+    mask = ones(Bool, n_draws)
+    p_above = 0.0
+    for s in 1:n_draws
+        θ_s = samples[:θ][s]
+        # peak combined prevalence across time for this draw
+        peak_combined = maximum((prev_a[s,:] .+ prev_b[s,:]) ./ popsize)
+        supp_s = 1 - exp(-θ_s * peak_combined)
+        p_above += (supp_s > threshold)
+    end
+    return p_above / n_draws
 end
 
 function run_analysis_all_prov() 
     # runs the chain analysis for all provinces and saves the results to a log file (this is useful for checking the results and for generating summary tables of the results across provinces)
     provs = ["British Columbia", "Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec"]
-    open("outputs/main_results.log", "w") do io
+    open("outputs/full_results.log", "w") do io
         redirect_stdout(io) do
             for prov in provs
+                println("=== Province: $prov === M1 RESULTS ===")
                 m1 = read_chain("outputs/chain_$(prov)_m1.jls")
                 chain_analysis(m1, prov, plot_figs = false)
+                println("=== Province: $prov === M0 / NULL RESULTS ===")
                 m0 = read_chain("outputs/chain_$(prov)_null.jls")
                 chain_analysis(m0, prov, plot_figs = false)    
             end
@@ -897,10 +998,6 @@ function plot_wastewater_signal()
         df, _ = read_province(prov)
         m1 = read_chain("outputs/chain_$(prov)_m1.jls")
         chain = chain_analysis(m1, prov, plot_figs = false)
-
-        m0 = read_chain("outputs/chain_$(prov)_null.jls")
-        chain_null = chain_analysis(m0, prov, plot_figs = false)
-
         obs_flu = df.flu
         obs_cov = df.covN2
         obs_rsv = df.rsv
@@ -908,15 +1005,15 @@ function plot_wastewater_signal()
         @gp :- i 1:length(obs_flu) obs_flu "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
         @gp :- (i+1) 1:length(obs_cov) obs_cov "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
         @gp :- (i+2) 1:length(obs_rsv) obs_rsv "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
-        @gp :- i 1:length(obs_flu) vec(mean(chain.ww_flu, dims = 1)) "smooth csplines with lines title 'Modelled Flu' ls 1" :-
-        @gp :- (i+1) 1:length(obs_cov) vec(mean(chain.ww_cov, dims = 1)) "smooth csplines with lines title 'Modelled Covid' ls 2" :-
-        @gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain.ww_rsv, dims = 1)) "smooth csplines with lines title 'Modelled RSV' ls 3" :- 
+        @gp :- i 1:length(obs_flu) vec(mean(chain.ww_flu, dims = 1)) "smooth csplines with lines notitle  ls 1" :-
+        @gp :- (i+1) 1:length(obs_cov) vec(mean(chain.ww_cov, dims = 1)) "smooth csplines with lines notitle ls 2" :-
+        @gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain.ww_rsv, dims = 1)) "smooth csplines with lines notitle ls 3" :- 
 
-        @gp :- i 1:length(obs_flu) vec(mean(chain_null.ww_flu, dims = 1)) "smooth csplines with lines title 'M0 Flu' ls 4" :-
-        @gp :- (i+1) 1:length(obs_cov) vec(mean(chain_null.ww_cov, dims = 1)) "smooth csplines with lines title 'M0 Covid' ls 5" :-
-        @gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain_null.ww_rsv, dims = 1)) "smooth csplines with lines title 'M0 RSV' ls 6" :- 
+        #@gp :- i 1:length(obs_flu) vec(mean(chain_null.ww_flu, dims = 1)) "smooth csplines with lines title 'M0 Flu' ls 4" :-
+        #@gp :- (i+1) 1:length(obs_cov) vec(mean(chain_null.ww_cov, dims = 1)) "smooth csplines with lines title 'M0 Covid' ls 5" :-
+        #@gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain_null.ww_rsv, dims = 1)) "smooth csplines with lines title 'M0 RSV' ls 6" :- 
     end
-    Gnuplot.save("outputs/wastewater_fits.pdf", term="pdfcairo enhanced size 6in,9in font 'Helvetica, 12'")
+    Gnuplot.save("outputs/figures/wastewater_fits.pdf", term="pdfcairo enhanced size 6in,9in font 'Helvetica, 12'")
     @gp 
 end
 
@@ -956,7 +1053,7 @@ function plot_theta_and_suppression()
 
     return pretty_table(main_table, backend=:markdown, 
         column_labels = ["Province", "Theta (95% CI)", "Flu", "Covid", "RSV"],
-        alignment = [:l, :c, :c, :c, :c])
+        alignment = [:l, :l, :l, :l, :l])
 end
 
 function plot_shedding_kernels() 
