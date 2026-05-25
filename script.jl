@@ -815,34 +815,37 @@ function chain_analysis(chain, name; plot_figs = true)
     Flu: $(supp_flu_mean) (95% Cr I: $supp_flu_low, $supp_flu_high)
     Covid: $(supp_cov_mean) (95% Cr I: $supp_cov_low, $supp_cov_high)
     RSV: $(supp_rsv_mean) (95% Cr I: $supp_rsv_low, $supp_rsv_high)")    
-
-    # calculate the Rt means 
-    Rt_flu_mean = round(maximum(vec(mean(Rt_flu, dims = 1))), digits=2)
-    Rt_cov_mean = round(maximum(vec(mean(Rt_cov, dims = 1))), digits=2)
-    Rt_rsv_mean = round(maximum(vec(mean(Rt_rsv, dims = 1))), digits=2)
-    Rt_flu_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_flu)]), digits=2)
-    Rt_cov_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_cov)]), digits=2)
-    Rt_rsv_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_rsv)]), digits=2)
-    Rt_flu_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_flu)]), digits=2)
-    Rt_cov_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_cov)]), digits=2)
-    Rt_rsv_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_rsv)]), digits=2)
-
-    # counterfactual Rt Means
-    Rt_cf_flu_mean = round(maximum(vec(mean(Rt_flu_cf, dims = 1))), digits=2)
-    Rt_cf_cov_mean = round(maximum(vec(mean(Rt_cov_cf, dims = 1))), digits=2)
-    Rt_cf_rsv_mean = round(maximum(vec(mean(Rt_rsv_cf, dims = 1))), digits=2)
-    Rt_cf_flu_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_flu_cf)]), digits=2)
-    Rt_cf_cov_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_cov_cf)]), digits=2)
-    Rt_cf_rsv_low = round(maximum([quantile(r, 0.05) for r in eachcol(Rt_rsv_cf)]), digits=2)
-    Rt_cf_flu_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_flu_cf)]), digits=2)
-    Rt_cf_cov_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_cov_cf)]), digits=2)
-    Rt_cf_rsv_high = round(maximum([quantile(r, 0.95) for r in eachcol(Rt_rsv_cf)]), digits=2)
-
     
-    println("Effective reproduction number (Rt) at peak:
-    Flu: counterfactual Rt: $(Rt_cf_flu_mean) (95% quantile: $Rt_cf_flu_low, $Rt_cf_flu_high), with theta Rt: $(Rt_flu_mean) Quantile($Rt_flu_low to $Rt_flu_high)
-    Covid: counterfactual Rt: $(Rt_cf_cov_mean) (95% quantile: $Rt_cf_cov_low, $Rt_cf_cov_high), with theta Rt: $(Rt_cov_mean) Quantile($Rt_cov_low to $Rt_cov_high)
-    RSV: counterfactual Rt: $(Rt_cf_rsv_mean) (95% quantile: $Rt_cf_rsv_low, $Rt_cf_rsv_high), with theta Rt: $(Rt_rsv_mean) Quantile($Rt_rsv_low to $Rt_rsv_high)")
+    # calculate the Rt means 
+    # per-draw peak Rt
+    peak_flu     = [maximum(r) for r in eachrow(Rt_flu)]
+    peak_cov     = [maximum(r) for r in eachrow(Rt_cov)]
+    peak_rsv     = [maximum(r) for r in eachrow(Rt_rsv)]
+    peak_flu_cf  = [maximum(r) for r in eachrow(Rt_flu_cf)]
+    peak_cov_cf  = [maximum(r) for r in eachrow(Rt_cov_cf)]
+    peak_rsv_cf  = [maximum(r) for r in eachrow(Rt_rsv_cf)]
+    Rt_flu_mean = round(mean(peak_flu), digits=2)
+    Rt_flu_low = round(quantile(peak_flu, 0.05), digits=2)
+    Rt_flu_high = round(quantile(peak_flu, 0.95), digits=2)
+    Rt_cov_mean = round(mean(peak_cov), digits=2)
+    Rt_cov_low = round(quantile(peak_cov, 0.05), digits=2)
+    Rt_cov_high = round(quantile(peak_cov, 0.95), digits=2)
+    Rt_rsv_mean = round(mean(peak_rsv), digits=2)
+    Rt_rsv_low = round(quantile(peak_rsv, 0.05), digits=2)
+    Rt_rsv_high = round(quantile(peak_rsv, 0.95), digits=2) 
+    # counterfactual Rt Means
+    Rt_cf_flu_mean = round(mean(peak_flu_cf), digits=2)
+    Rt_cf_flu_low = round(quantile(peak_flu_cf, 0.05), digits=2)
+    Rt_cf_flu_high = round(quantile(peak_flu_cf, 0.95), digits=2)
+    Rt_cf_cov_mean = round(mean(peak_cov_cf), digits=2)
+    Rt_cf_cov_low = round(quantile(peak_cov_cf, 0.05), digits=2)
+    Rt_cf_cov_high = round(quantile(peak_cov_cf, 0.95), digits=2)
+    Rt_cf_rsv_mean = round(mean(peak_rsv_cf), digits=2)
+    Rt_cf_rsv_low = round(quantile(peak_rsv_cf, 0.05), digits=2)
+    Rt_cf_rsv_high = round(quantile(peak_rsv_cf, 0.95), digits=2)
+    println("Flu:   CF Rt=$(Rt_cf_flu_mean), realised Rt=$(Rt_flu_mean), ")
+    println("Covid: CF Rt=$(Rt_cf_cov_mean), realised Rt=$(Rt_cov_mean), ")
+    println("RSV:   CF Rt=$(Rt_cf_rsv_mean), realised Rt=$(Rt_rsv_mean), ")
 
     # rope suppression
     if mtype
@@ -979,11 +982,10 @@ function run_analysis_all_prov()
     end
 end
 
-function plot_wastewater_signal() 
-    # figure for appendix 
-    # panel of 6 (3 x 3), with the observed wastewater signal for flu, covid, and rsv across the 6 provinces.
+function plot_wastewater()
+    # plots the raw WW signal
     provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec", "British Columbia"]
-    @gp "reset"
+    @gp "reset" 
     @gp :- gp_config() :-
     @gp :- "set multiplot layout 6, 3" :-
     @gp :- "set label 101 'Alberta' at screen 0.075, 1.00-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
@@ -1005,15 +1007,132 @@ function plot_wastewater_signal()
         @gp :- i 1:length(obs_flu) obs_flu "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
         @gp :- (i+1) 1:length(obs_cov) obs_cov "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
         @gp :- (i+2) 1:length(obs_rsv) obs_rsv "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- i 1:length(obs_flu) df.flu_sg "smooth csplines with lines notitle  ls 1" :-
+        @gp :- (i+1) 1:length(obs_cov) df.cov_sg "smooth csplines with lines notitle ls 2" :-
+        @gp :- (i+ 2) 1:length(obs_rsv) df.rsv_sg "smooth csplines with lines notitle ls 3" :- 
+    end
+    Gnuplot.save("outputs/figures/wastewater_raw_allprovs.pdf", term="pdfcairo enhanced size 6in,9in font 'Helvetica, 12'")
+    
+    # do another figure with just two provinces for presentation purposes
+    # so don't have to deal with indices
+    # I changed the color to grey and black here
+    @gp "reset" 
+    @gp :- gp_config() :-
+    @gp :- "set multiplot layout 2, 3" :-
+    @gp :- "set label 101 'Alberta' at screen 0.015, 1.00-0.020 left font 'Helvetica Bold,12' tc rgb '#444444'" :-
+    @gp :- "set label 102 'Ontario' at screen 0.015, 0.50-0.020 left font 'Helvetica Bold,12' tc rgb '#444444'" :-
+    @gp :- "set tmargin 2" :-
+    for (prov, i) in zip(["Alberta", "Ontario"], 1:3:6)
+        println(i)
+        df, _ = read_province(prov)
+        m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+        chain = chain_analysis(m1, prov, plot_figs = false)
+        obs_flu = df.flu
+        obs_cov = df.covN2
+        obs_rsv = df.rsv
+        #@gp :- "set nokey" :-
+        @gp :- i 1:length(obs_flu) obs_flu "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- (i+1) 1:length(obs_cov) obs_cov "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- (i+2) 1:length(obs_rsv) obs_rsv "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- i 1:length(obs_flu) df.flu_sg "smooth csplines with lines notitle  ls 1 lc rgb '#bdbdbd'" :-
+        @gp :- (i+1) 1:length(obs_cov) df.cov_sg "smooth csplines with lines notitle ls 2 lc rgb '#bdbdbd'" :-
+        @gp :- (i+ 2) 1:length(obs_rsv) df.rsv_sg "smooth csplines with lines notitle ls 3 lc rgb '#bdbdbd'" :- 
+    end
+    Gnuplot.save("outputs/figures/wastewater_raw_twoprovs.pdf", term="pdfcairo enhanced size 6in,3in font 'Helvetica, 12'")
+    @gp 
+end
+
+function plot_fitted_wastewater_signal() 
+    # sampling from the posterior, run the ODE forward and plot the WW
+    # panel of 6 (3 x 3), with the observed wastewater signal for flu, covid, and rsv across the 6 provinces.
+    provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec", "British Columbia"]
+    @gp "reset"
+    @gp :- gp_config() :-
+    @gp :- "set multiplot layout 6, 3" :-
+    @gp :- "set label 101 'Alberta' at screen 0.075, 1.00-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 102 'Ontario' at screen 0.075, 0.8333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 103 'Manitoba' at screen 0.075, 0.6667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 104 'Nova Scotia' at screen 0.075, 0.5000-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 105 'Quebec' at screen 0.075, 0.3333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 106 'British Columbia' at screen 0.075, 0.1667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set tmargin 2" :-
+    @gp :- "set style fill transparent solid 0.3 noborder" :-
+    for (prov, i) in zip(provs, 1:3:18)
+        println(i)
+        df, _ = read_province(prov)
+        m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+        chain = chain_analysis(m1, prov, plot_figs = false)
+        obs_flu = df.flu
+        obs_cov = df.covN2
+        obs_rsv = df.rsv
+        #@gp :- "set nokey" :-
+        @gp :- i 1:length(obs_flu) obs_flu "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- (i+1) 1:length(obs_cov) obs_cov "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- (i+2) 1:length(obs_rsv) obs_rsv "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
         @gp :- i 1:length(obs_flu) vec(mean(chain.ww_flu, dims = 1)) "smooth csplines with lines notitle  ls 1" :-
         @gp :- (i+1) 1:length(obs_cov) vec(mean(chain.ww_cov, dims = 1)) "smooth csplines with lines notitle ls 2" :-
         @gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain.ww_rsv, dims = 1)) "smooth csplines with lines notitle ls 3" :- 
 
+        
+        lo = [quantile(c, 0.05) for c in eachcol(chain.ww_flu)]
+        hi = [quantile(c, 0.95) for c in eachcol(chain.ww_flu)]
+        @gp :- i 1:length(obs_flu) lo hi "with filledcurves ls 1 notitle" :-
+
+        lo = [quantile(c, 0.05) for c in eachcol(chain.ww_cov)]
+        hi = [quantile(c, 0.95) for c in eachcol(chain.ww_cov)]
+        @gp :- (i+1) 1:length(obs_cov) lo hi "with filledcurves notitle ls 2" :-
+
+        lo = [quantile(c, 0.05) for c in eachcol(chain.ww_rsv)]
+        hi = [quantile(c, 0.95) for c in eachcol(chain.ww_rsv)]
+        @gp :- (i+2) 1:length(obs_rsv) lo hi "with filledcurves notitle ls 3" :-
         #@gp :- i 1:length(obs_flu) vec(mean(chain_null.ww_flu, dims = 1)) "smooth csplines with lines title 'M0 Flu' ls 4" :-
         #@gp :- (i+1) 1:length(obs_cov) vec(mean(chain_null.ww_cov, dims = 1)) "smooth csplines with lines title 'M0 Covid' ls 5" :-
         #@gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain_null.ww_rsv, dims = 1)) "smooth csplines with lines title 'M0 RSV' ls 6" :- 
     end
     Gnuplot.save("outputs/figures/wastewater_fits.pdf", term="pdfcairo enhanced size 6in,9in font 'Helvetica, 12'")
+    @gp 
+
+    ## do the same for top three (for presentation purposes)
+    @gp "reset"
+    @gp :- gp_config() :-
+    @gp :- "set multiplot layout 3, 3" :-
+    @gp :- "set label 101 'Alberta' at screen 0.015, 1.00-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 102 'Ontario' at screen 0.015, 0.66-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 103 'Manitoba' at screen 0.015, 0.33-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set tmargin 2" :-
+    @gp :- "set style fill transparent solid 0.3 noborder" :- 
+    for (prov, i) in zip(("Alberta", "Ontario", "Manitoba"), 1:3:18)
+        println(i)
+        df, _ = read_province(prov)
+        m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+        chain = chain_analysis(m1, prov, plot_figs = false)
+        obs_flu = df.flu
+        obs_cov = df.covN2
+        obs_rsv = df.rsv
+        #@gp :- "set nokey" :-
+        @gp :- i 1:length(obs_flu) obs_flu "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- (i+1) 1:length(obs_cov) obs_cov "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- (i+2) 1:length(obs_rsv) obs_rsv "with points notitle lw 1 ps 0.2 pt 6 lc rgb 'black'" :-
+        @gp :- i 1:length(obs_flu) vec(mean(chain.ww_flu, dims = 1)) "smooth csplines with lines notitle  ls 1" :-
+        @gp :- (i+1) 1:length(obs_cov) vec(mean(chain.ww_cov, dims = 1)) "smooth csplines with lines notitle ls 2" :-
+        @gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain.ww_rsv, dims = 1)) "smooth csplines with lines notitle ls 3" :- 
+
+        lo = [quantile(c, 0.05) for c in eachcol(chain.ww_flu)]
+        hi = [quantile(c, 0.95) for c in eachcol(chain.ww_flu)]
+        @gp :- i 1:length(obs_flu) lo hi "with filledcurves ls 1 notitle" :-
+
+        lo = [quantile(c, 0.05) for c in eachcol(chain.ww_cov)]
+        hi = [quantile(c, 0.95) for c in eachcol(chain.ww_cov)]
+        @gp :- (i+1) 1:length(obs_cov) lo hi "with filledcurves notitle ls 2" :-
+
+        lo = [quantile(c, 0.05) for c in eachcol(chain.ww_rsv)]
+        hi = [quantile(c, 0.95) for c in eachcol(chain.ww_rsv)]
+        @gp :- (i+2) 1:length(obs_rsv) lo hi "with filledcurves notitle ls 3" :-
+        #@gp :- i 1:length(obs_flu) vec(mean(chain_null.ww_flu, dims = 1)) "smooth csplines with lines title 'M0 Flu' ls 4" :-
+        #@gp :- (i+1) 1:length(obs_cov) vec(mean(chain_null.ww_cov, dims = 1)) "smooth csplines with lines title 'M0 Covid' ls 5" :-
+        #@gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain_null.ww_rsv, dims = 1)) "smooth csplines with lines title 'M0 RSV' ls 6" :- 
+    end
+    Gnuplot.save("outputs/figures/wastewater_fits_first3.pdf", term="pdfcairo enhanced size 6in,4.5in font 'Helvetica, 12'")
     @gp 
 end
 
