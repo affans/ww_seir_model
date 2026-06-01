@@ -225,7 +225,7 @@ function hyperparameters(name)
     end
 end
 
-function find_emergence_week(signal, threshold=1.0)
+function find_emergence_week(signal, threshold=2.0)
     # find first week where signal exceeds threshold for 2+ consecutive weeks
     for wk in 1:length(signal)-1
         if signal[wk] > threshold && signal[wk+1] > threshold
@@ -233,6 +233,17 @@ function find_emergence_week(signal, threshold=1.0)
         end
     end
     return length(signal)
+end
+
+function mean_covid_at_emergence(df)
+    # find when flu and rsv emerge, take the earlier of the two,
+    # then compute mean COVID concentration in the 4 weeks before that point
+    flu_emergence = find_emergence_week(df.flu_sg)
+    rsv_emergence = find_emergence_week(df.rsv_sg)
+    first_emergence = min(flu_emergence, rsv_emergence)
+    window_start = max(1, first_emergence) # clamp to avoid indexing before week 1
+    window_end   = first_emergence    
+    return mean(df.cov_sg[window_start:window_end])
 end
 
 function sym_defn_ode(du, u, p, t)
@@ -514,7 +525,7 @@ function run_inference(name, m0_or_m1)
     else 
         _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=true)
     end
-    chains = sample(_m1, NUTS(), MCMCThreads(), 1000, 4)    
+    chains = sample(_m1, NUTS(), MCMCThreads(), 4000, 4)    
     return chains
 end 
 
@@ -557,59 +568,6 @@ function run_all_scenarios()
         m1 = run_inference(prov, :m1)
         save_chain("outputs/chain_$(prov)_null.jls", m0)
         save_chain("outputs/chain_$(prov)_m1.jls", m1)
-    end
-end
-
-function _optimize_ontario(iflu, icov, irsv, tflu, trsv) 
-    # objective function for comparing inference results to observed data, 
-    # for example by simulating the ODE with posterior mean parameters and calculating a goodness-of-fit metric.
-    ### temp function 
-    df, _ = read_province("Ontario")
-    obs_flu = df.flu_sg
-    obs_cov = df.cov_sg
-    obs_rsv = df.rsv_sg
-
-    data = TOML.parsefile("parameters.toml")
-    province_params = from_dict(ProvinceParams, data["Ontario"]; 
-        immunity_flu = iflu,
-        immunity_cov = icov,
-        immunity_rsv = irsv,
-        t_school_flu = tflu,
-        t_school_rsv = trsv
-    ) # convert Configurations struct
-    
-    _fname = "iflu" * string(round(Int, iflu * 100)) * "_" * 
-                "icov" * string(round(Int, icov * 100)) * "_" * 
-                "irsv" * string(round(Int, irsv * 100)) * "_" * 
-                "tflu" * string(round(Int, tflu)) * "_" * 
-                "trsv" * string(round(Int, trsv))
-    fname = "/home/asw850/optim_res/ontario_$(_fname).jls"    
-    
-    hp = hyperparameters("Ontario")
-    _m1 = inference_model(obs_flu, obs_cov, obs_rsv, hp, province_params; nullmodel=false)
-    m1 = sample(_m1, NUTS(), 4000)  
-    save_chain(fname, m1)
-    post_mat = chain_analysis(m1, "Ontario", plot_figs=false)
-
-    # compute the errors from the observed data (this assesses the model fit to the data) 
-    flu_error = sum((vec(mean(post_mat.ww_flu, dims = 1)) - obs_flu).^2)
-    cov_error = sum((vec(mean(post_mat.ww_cov, dims = 1)) - obs_cov).^2)
-    rsv_error = sum((vec(mean(post_mat.ww_rsv, dims = 1)) - obs_rsv).^2)
-    return flu_error + cov_error + rsv_error
-end
-
-function optimize_ontario()
-    try_samples = 50
-    println("running try_samples = $try_samples for Ontario optimization...")
-    @thyperopt for i = 50,
-        sampler = RandomSampler(), # This is default if none provided
-        _iflu = [0.42, 0.425, 0.43, 0.435, 0.44, 0.445, 0.45, 0.455],
-        _icov = [0.64, 0.645, 0.65, 0.655, 0.66, 0.665, 0.67, 0.675, 0.68],
-        _irsv = [0.52, 0.525, 0.53, 0.535, 0.54, 0.545, 0.55, 0.555, 0.56],
-        _tflu = [105, 110, 113, 116, 119, 122, 125],
-        _trsv = [90, 91, 92, 93, 94, 95, 96, 97, 98]
-        println(i, "\t", _iflu, "\t", _icov, "\t", _irsv, "   \t")
-        _optimize_ontario(_iflu, _icov, _irsv, _tflu, _trsv)
     end
 end
 
@@ -983,23 +941,23 @@ function run_analysis_all_prov()
 end
 
 function plot_wastewater()
-    # plots the raw WW signal
+    # plots the raw WW signal without the fitted curve
     provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec", "British Columbia"]
     @gp "reset" 
     @gp :- gp_config() :-
     @gp :- "set multiplot layout 6, 3" :-
-    @gp :- "set label 101 'Alberta' at screen 0.075, 1.00-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
-    @gp :- "set label 102 'Ontario' at screen 0.075, 0.8333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
-    @gp :- "set label 103 'Manitoba' at screen 0.075, 0.6667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
-    @gp :- "set label 104 'Nova Scotia' at screen 0.075, 0.5000-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
-    @gp :- "set label 105 'Quebec' at screen 0.075, 0.3333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
-    @gp :- "set label 106 'British Columbia' at screen 0.075, 0.1667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 101 'Alberta' at screen 0.055, 1.00-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 102 'Ontario' at screen 0.055, 0.8333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 103 'Manitoba' at screen 0.055, 0.6667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 104 'Nova Scotia' at screen 0.055, 0.5000-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 105 'Quebec' at screen 0.055, 0.3333-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
+    @gp :- "set label 106 'British Columbia' at screen 0.055, 0.1667-0.015 left font 'Helvetica,12' tc rgb '#444444'" :-
     @gp :- "set tmargin 2" :-
     for (prov, i) in zip(provs, 1:3:18)
         println(i)
         df, _ = read_province(prov)
-        m1 = read_chain("outputs/chain_$(prov)_m1.jls")
-        chain = chain_analysis(m1, prov, plot_figs = false)
+        #m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+        #chain = chain_analysis(m1, prov, plot_figs = false)
         obs_flu = df.flu
         obs_cov = df.covN2
         obs_rsv = df.rsv
@@ -1025,8 +983,8 @@ function plot_wastewater()
     for (prov, i) in zip(["Alberta", "Ontario"], 1:3:6)
         println(i)
         df, _ = read_province(prov)
-        m1 = read_chain("outputs/chain_$(prov)_m1.jls")
-        chain = chain_analysis(m1, prov, plot_figs = false)
+        #m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+        #chain = chain_analysis(m1, prov, plot_figs = false)
         obs_flu = df.flu
         obs_cov = df.covN2
         obs_rsv = df.rsv
@@ -1089,7 +1047,7 @@ function plot_fitted_wastewater_signal()
         #@gp :- (i+1) 1:length(obs_cov) vec(mean(chain_null.ww_cov, dims = 1)) "smooth csplines with lines title 'M0 Covid' ls 5" :-
         #@gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain_null.ww_rsv, dims = 1)) "smooth csplines with lines title 'M0 RSV' ls 6" :- 
     end
-    Gnuplot.save("outputs/figures/wastewater_fits.pdf", term="pdfcairo enhanced size 6in,9in font 'Helvetica, 12'")
+    Gnuplot.save("outputs/figures/figure1_ww_fitted_model.pdf", term="pdfcairo enhanced size 6in,9in font 'Helvetica, 12'")
     @gp 
 
     ## do the same for top three (for presentation purposes)
@@ -1132,7 +1090,7 @@ function plot_fitted_wastewater_signal()
         #@gp :- (i+1) 1:length(obs_cov) vec(mean(chain_null.ww_cov, dims = 1)) "smooth csplines with lines title 'M0 Covid' ls 5" :-
         #@gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain_null.ww_rsv, dims = 1)) "smooth csplines with lines title 'M0 RSV' ls 6" :- 
     end
-    Gnuplot.save("outputs/figures/wastewater_fits_first3.pdf", term="pdfcairo enhanced size 6in,4.5in font 'Helvetica, 12'")
+    Gnuplot.save("outputs/figures/figure1_ww_fitted_model_first3.pdf", term="pdfcairo enhanced size 6in,4.5in font 'Helvetica, 12'")
     @gp 
 end
 
@@ -1192,6 +1150,115 @@ function plot_shedding_kernels()
     Gnuplot.save("outputs/shedding_kernels.svg", term="svg enhanced size 1000, 400 font 'Helvetica, 16'")
     Gnuplot.save("outputs/shedding_kernels.pdf", term="pdfcairo enhanced size 5in,2in font 'Helvetica, 12'")
     println("plot set, call using @gp in terminal to display.")
+    @gp
+end
+
+function plot_ridgeplots()
+    provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec", "British Columbia"]
+    #colors = ["#f2f0f7","#dadaeb","#bcbddc","#9e9ac8","#756bb1","#54278f"]
+    colors = ["#feedde","#fdd0a2","#fdae6b","#fd8d3c","#e6550d","#a63603"]
+    colors = ["#b2182b","#ef8a62","#fddbc7","#d1e5f0","#67a9cf","#2166ac"]
+    offsets = reverse([0.00, 0.25, 0.50, 0.75, 1.00, 1.25])
+    xmin = 0
+    xmax = 20
+    @gp "reset" 
+    @gp :- "unset key" :- 
+    @gp :- "unset border" :- 
+    @gp :- "unset ytics" :- 
+    @gp :- "set xtics nomirror" :- 
+    @gp :- "set xrange [-1.9:*]"
+    @gp :- "set xtics 2" :- 
+    @gp :- "set style fill solid 0.9 noborder" :- 
+    @gp :- "set xlabel 'θ'" :-
+    #@gp :- "set style fill pattern 6 noborder"
+    # draw the y-axis line at the left edge of the plot
+    @gp :- "set arrow from first -0.25, first $(minimum(offsets)) to first -0.25, first $(maximum(offsets) + 0.25) nohead lc rgb 'black' lw 2"
+    @gp :- [-0.25 20] [1.50 1.50] "w lines lc rgb 'grey' lw 2" :-
+    #@gp :- [0 20] [1.75 1.75] "w lines lc rgb 'black'" :-
+    for x in 0:1:20
+        @gp :- [x x] [0.0 1.50] "w lines lc rgb 'light-grey' lw 1" :- 
+    end
+    for (i, prov) in enumerate(provs)
+        m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+        θ = vec(get(m1; section=:parameters)[:θ][:, 1])
+        k1 = kde(θ)
+        off1 = offsets[i]
+
+        # if BC, add split line and adjust offset in the label
+        if prov in ("British Columbia",)
+            prov = replace(prov, " " => "\\n")
+            @gp :- "set label $i \"$prov\" at first -0.34, first $(off1 + 0.055) right offset 0, 1.0 rotate by 15" :- 
+        else 
+            @gp :- "set label $i \"$prov\" at first -0.34, first $(off1 + 0.055) right offset 0, 0.0 rotate by 15" :- 
+        end
+        
+        @gp :- k1.x (k1.density .+ off1) "smooth csplines w filledcurves lc rgb '$(colors[i])'" :-
+        @gp :- k1.x (k1.density .+ off1) "smooth csplines w lines lc rgb 'black' lw 1.4" :-
+        if off1 == 0.0 
+            @gp :- [-0.25 20] [off1 off1] "w lines lc rgb 'black' lw 2" :-
+        else
+            @gp :- [-0.25 20] [off1 off1] "w lines lc rgb 'grey' lw 2" :-
+        end 
+    end
+    Gnuplot.save("outputs/figures/theta_histograms.pdf", term="pdfcairo enhanced size 6in,3in font 'Helvetica, 10'")
+    @gp
+end
+
+
+function plot_theta_vs_covid_ranked()
+    # ordered low to high by θ posterior mean
+    provs = ["British Columbia", "Quebec", "Nova Scotia", "Ontario", "Manitoba",  "Alberta"]
+    θ_means = [3.39, 4.08, 7.69, 11.85, 11.02,  12.28]
+    θ_lows  = [1.72, 1.48, 6.57,  9.32, 9.52,   10.66]
+    θ_highs = [5.30, 7.03, 8.79, 14.38, 12.68,  14.01]
+
+    # mean COVID wastewater concentration at flu/RSV emergence per province
+    covid_at_emergence = Float64[]
+    for prov in provs
+        df, _ = read_province(prov)
+        flu_ew = find_emergence_week(df.flu_sg)
+        rsv_ew = find_emergence_week(df.rsv_sg)
+        first_ew = min(flu_ew, rsv_ew)
+        window_start = max(1, first_ew)
+        push!(covid_at_emergence, mean(df.cov_sg[window_start:(window_start+4)]))
+    end
+
+    println("COVID at emergence: ", round.(covid_at_emergence, digits=1))
+    println("Provinces ordered: ", provs)
+
+    x = collect(1:6)
+    short_names = ["BC", "QC", "NS", "MB", "ON", "AB"]
+    xtick_str = join(["'$(short_names[i])' $i" for i in 1:6], ", ")
+
+    @gp "reset"
+    @gp :- gp_config() :-
+    @gp :- " set border 11 front ls 101" :-
+    # dual y-axis setup
+    @gp :- "set ylabel 'Viral interference coefficient θ'" :-
+    @gp :- "set y2label 'Mean COVID at emergence (gc/L)'" :-
+    @gp :- "set ytics  nomirror" :-
+    @gp :- "set y2tics 20 nomirror" :-
+    @gp :- "set yrange  [0:20]" :-
+    @gp :- "set y2range [0:100]" :-  # adjust upper bound after seeing actual values
+    #@gp :- "set xrange [0.5:6.5]" :-
+    @gp :- "set xtics ($xtick_str)" :-
+    @gp :- "set key off" :-
+    
+    # bar plot on second axis (plotted first so dots sit on top)
+    @gp :- "set style fill solid 0.35 noborder" :-
+    @gp :- "set boxwidth 0.6 relative" :-
+    @gp :- x covid_at_emergence "with boxes axes x1y2 lc rgb '#8da0cb' notitle" :-
+    #@gp :- x covid_at_emergence "with boxes axes x1y2 lc rgb '#fc8d62' notitle" :-
+
+     # error bars for θ
+     # Make caps small and elegant
+    @gp :- "set bars small" :-                 # small, elegant caps
+    @gp :- "set pointsize 0.1" :-              # slightly larger points
+    #@gp :- "set style line 1 lc rgb '#444444' lw 2 pt 7"   # dark grey, clean point
+    @gp :- x θ_means θ_lows θ_highs "with yerrorbars axes x1y1 ls 1 lc rgb '#66c2a5' notitle" :-
+    @gp :- x θ_means "with points ls 1 pt 7 ps 0.8 axes x1y1 notitle" :-
+    Gnuplot.save("outputs/figures/theta_vs_covid_ranked.pdf", term="pdfcairo enhanced size 6in,2in font 'Helvetica, 10'")
+
     @gp
 end
 
