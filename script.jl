@@ -6,7 +6,7 @@ using MCMCChains, KernelDensity
 using SavitzkyGolay # filter
 using Gnuplot, PrettyTables, TerminalPager, GarishPrint
 using Dates, Parameters, Configurations, Match, JSON
-using Serialization, Hyperopt, Printf
+using Serialization, Hyperopt, Printf, LaTeXStrings
 
 Gnuplot.options.term = "sixelgd truecolor enhanced size 900,450 scroll font Arial 12"
 # when adding new packages, avoid precompilation by
@@ -899,6 +899,12 @@ function chain_analysis(chain, name; plot_figs = true)
         #Gnuplot.save("outputs/final_size.svg", term="svg enhanced size 800,800 font ', 22' background rgb '#FAFAFA'")
         display(@gp)
     end 
+
+    # println("Flu:   CF Rt=$(Rt_cf_flu_mean), realised Rt=$(Rt_flu_mean), ")
+    # println("Covid: CF Rt=$(Rt_cf_cov_mean), realised Rt=$(Rt_cov_mean), ")
+    # println("RSV:   CF Rt=$(Rt_cf_rsv_mean), realised Rt=$(Rt_rsv_mean), ")
+
+
     # return the posterior predictive matrices for further analysis if needed
     return (; inc_flu, inc_cov, inc_rsv,
             prev_flu, prev_cov, prev_rsv,
@@ -906,7 +912,9 @@ function chain_analysis(chain, name; plot_figs = true)
             meanθ, lowθ, highθ,
             supp_flu_mean, supp_cov_mean, supp_rsv_mean,
             supp_flu_low, supp_cov_low, supp_rsv_low,
-            supp_flu_high, supp_cov_high, supp_rsv_high, Rt_flu, Rt_cov, Rt_rsv)
+            supp_flu_high, supp_cov_high, supp_rsv_high, 
+            Rt_flu_mean, Rt_cov_mean, Rt_rsv_mean, 
+            Rt_cf_flu_mean, Rt_cf_cov_mean, Rt_cf_rsv_mean)
 end
 
 function rope_suppression(samples, prev_a, prev_b, popsize; threshold=0.10)
@@ -924,7 +932,9 @@ function rope_suppression(samples, prev_a, prev_b, popsize; threshold=0.10)
 end
 
 function run_analysis_all_prov() 
-    # runs the chain analysis for all provinces and saves the results to a log file (this is useful for checking the results and for generating summary tables of the results across provinces)
+    # runs the chain analysis for all provinces 
+    # and saves the results to a log file 
+    # log file can be parsed later for generating summary tables of the results across provinces)
     provs = ["British Columbia", "Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec"]
     open("outputs/full_results.log", "w") do io
         redirect_stdout(io) do
@@ -941,7 +951,8 @@ function run_analysis_all_prov()
 end
 
 function plot_wastewater()
-    # plots the raw WW signal without the fitted curve
+    # plots the raw WW signal (and the smoothedcurve)
+    # without the fitted curve
     provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec", "British Columbia"]
     @gp "reset" 
     @gp :- gp_config() :-
@@ -1047,7 +1058,7 @@ function plot_fitted_wastewater_signal()
         #@gp :- (i+1) 1:length(obs_cov) vec(mean(chain_null.ww_cov, dims = 1)) "smooth csplines with lines title 'M0 Covid' ls 5" :-
         #@gp :- (i+ 2) 1:length(obs_rsv) vec(mean(chain_null.ww_rsv, dims = 1)) "smooth csplines with lines title 'M0 RSV' ls 6" :- 
     end
-    Gnuplot.save("outputs/figures/figure1_ww_fitted_model.pdf", term="pdfcairo enhanced size 6in,9in font 'Helvetica, 12'")
+    Gnuplot.save("outputs/figures/figure1_ww_fitted_model.pdf", term="pdfcairo enhanced size 6.5in,9in font 'Helvetica, 12'")
     @gp 
 
     ## do the same for top three (for presentation purposes)
@@ -1094,10 +1105,37 @@ function plot_fitted_wastewater_signal()
     @gp 
 end
 
+function print_diagnostics()
+
+    prov = "Quebec"
+    println("=== Province: $prov === M1 RESULTS ===")
+    chain = read_chain("outputs/chain_$(prov)_m1.jls")
+    _as = DataFrame(summarystats(chain))
+    _aq = DataFrame(quantile(chain))
+    as = @select(_as, parameters, mean, std, ess_bulk, rhat)
+    aq = @chain _aq begin
+        @clean_names
+        @select(parameters, `2_5percent`, `97_5percent`)
+    end
+    df = @inner_join(as, aq)
+
+
+    # after I get the template working in latex, 
+    # i don't need the parameters column
+    col_vals = [L"$\log_{M_c}$", L"$\log_{M_f}$", L"$\log_{M_r}$", L"$\sigma_\text{cov}$", L"$\sigma_\text{flu}$", L"$\sigma_\text{rsv}$", L"$\beta_{i, \text{base}}", L"$\beta_{i, \text{peak}}", L"$\beta_{v, \text{base}}", L"$\beta_{v, \text{peak}}", L"$\beta_{r, \text{base}}", L"$\beta_{r, \text{peak}}", L"$i_{0, c}$", L"$\theta$", L"$\epsilon_\text{flu}$", L"$\epsilon_\text{cov}$", L"$\epsilon_\text{rsv}$", L"$t_\text{sch, flu}$", L"$t_\text{sch, cov}$", L"$t_\text{sch, rsv}$"]
+    df2 = @chain df begin 
+        @select(!parameters) # remove the non-latex/unicode parameters 
+        @mutate(parameters = !!col_vals)
+        @relocate(parameters, before = 1)
+    end
+
+    return df2
+end
+
 function plot_theta_and_suppression()
     provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec", "British Columbia"]
     main_table = Matrix{Any}(nothing, 0, 5) # 
-
+    rt_table = Matrix{Any}(nothing, 0, 7)
     # i don't know if making whisker plots make sense here 
     # it shows a 'trend' (unless we put provinces on the y-axis)
 
@@ -1123,14 +1161,21 @@ function plot_theta_and_suppression()
         rstr = Printf.@sprintf("%.0f%% (%.0f–%.0f%%)", chain.supp_rsv_mean * 100, chain.supp_rsv_low * 100, chain.supp_rsv_high * 100)
         row = [prov θstr fstr cstr rstr]
         main_table = vcat(main_table, row)
+
+        rt_row = [prov chain.Rt_flu_mean  chain.Rt_cov_mean chain.Rt_rsv_mean chain.Rt_cf_flu_mean chain.Rt_cf_cov_mean chain.Rt_cf_rsv_mean]
+        rt_table = vcat(rt_table, rt_row)
         # @gp :- 1 [i*2] [chain.supp_flu_mean] [chain.supp_flu_low] [chain.supp_flu_high] "with errorbars notitle ls 1 lw 2 pt 7" :-
         # @gp :- 1 [i*2-0.35] [chain.supp_cov_mean] [chain.supp_cov_low] [chain.supp_cov_high] "with errorbars notitle ls 2 lw 2 pt 7" :-
         # @gp :- 1 [i*2+0.35] [chain.supp_rsv_mean] [chain.supp_rsv_low] [chain.supp_rsv_high] "with errorbars notitle ls 3 lw 2 pt 7" :-
     end
 
-    return pretty_table(main_table, backend=:markdown, 
+    pretty_table(main_table, backend=:markdown, 
         column_labels = ["Province", "Theta (95% CI)", "Flu", "Covid", "RSV"],
         alignment = [:l, :l, :l, :l, :l])
+    println("\n\n")
+    pretty_table(rt_table, backend=:markdown, 
+        column_labels = ["Province", "Rt Flu", "Rt Covid", "Rt RSV", "Rt_cf Flu", "Rt_cf Covid", "Rt_cf RSV"],
+        alignment = [:l, :l, :l, :l, :l, :l, :l])
 end
 
 function plot_shedding_kernels() 
@@ -1148,7 +1193,7 @@ function plot_shedding_kernels()
     @gp :- 1:length(K_COV) K_COV "smooth csplines with lines title 'SARS-CoV-2' ls 2" :-
     @gp :- 1:length(K_RSV) K_RSV "smooth csplines with lines title 'RSV' ls 3" :-
     Gnuplot.save("outputs/shedding_kernels.svg", term="svg enhanced size 1000, 400 font 'Helvetica, 16'")
-    Gnuplot.save("outputs/shedding_kernels.pdf", term="pdfcairo enhanced size 5in,2in font 'Helvetica, 12'")
+    Gnuplot.save("outputs/shedding_kernels.pdf", term="pdfcairo enhanced size 6.5in,2in font 'Helvetica, 12'")
     println("plot set, call using @gp in terminal to display.")
     @gp
 end
