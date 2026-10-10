@@ -328,6 +328,12 @@ const K_COV = make_kernel(2.5, 1.8, 21)
 const K_FLU = make_kernel(2.5, 1.0, 21) 
 const K_RSV = make_kernel(2.0, 2.5, 21) 
 
+const KERNELS = Dict(
+    :base   => (flu = make_kernel(2.5, 1.0, 21),  cov = make_kernel(2.5, 1.8, 21), rsv = make_kernel(2.0, 2.5, 21)),
+    :common => (flu = make_kernel(2.5, 1.8, 21),  cov = make_kernel(2.5, 1.8, 21), rsv = make_kernel(2.5, 1.8, 21)),
+    :long   => (flu = make_kernel(2.5, 1.5, 21),  cov = make_kernel(2.5, 2.7, 21), rsv = make_kernel(2.0, 3.75, 21)),
+)
+
 function sym_convolve_seir(incidence, kernel)
     len_seq = length(incidence)
     len_ker = length(kernel)
@@ -341,10 +347,10 @@ function sym_convolve_seir(incidence, kernel)
 end
 
 # set up a Turing model 
-@model function inference_model(obs_ww_flu, obs_ww_cov, obs_ww_rsv, hyperparams, province_params; nullmodel=false)
+@model function inference_model(obs_ww_flu, obs_ww_cov, obs_ww_rsv, hyperparams, province_params; nullmodel=false, freetheta=false, kernels=KERNELS[:base])
     # if nullmodel == true, theta is set to zero manually 
     # meaning there is no sampled theta - adjust post hoc scripts accordingly.
-
+   
     # unpack the province parameters 
     (; popsize,
     immunity_flu, # pre-immunity levels
@@ -424,10 +430,12 @@ end
     days = weeks * 7.0  
     tspan = (0.0, days)
 
-    if nullmodel 
-        θ = 0.0 
-    else 
-        θ ~ Truncated(Normal(0, 2.0), 0, Inf) 
+    if nullmodel
+        θ = 0.0
+    elseif freetheta
+        θ ~ Normal(0, 2.0)        # sign-unconstrained sensitivity analysis
+    else
+        θ ~ Truncated(Normal(0, 2.0), 0, Inf)
     end
 
     ε_flu ~ hyperparams.ε_flu
@@ -455,9 +463,12 @@ end
     Iᵥ_sim = make_incidence(sol[14, :])
     Iᵣ_sim = make_incidence(sol[15, :])
 
-    Wᵢ_sim = sym_convolve_seir(Iᵢ_sim ./ popsize, K_FLU) * M_f
-    Wᵥ_sim = sym_convolve_seir(Iᵥ_sim ./ popsize, K_COV) * M_c
-    Wᵣ_sim = sym_convolve_seir(Iᵣ_sim ./ popsize, K_RSV) * M_r
+    # Wᵢ_sim = sym_convolve_seir(Iᵢ_sim ./ popsize, K_FLU) * M_f
+    # Wᵥ_sim = sym_convolve_seir(Iᵥ_sim ./ popsize, K_COV) * M_c
+    # Wᵣ_sim = sym_convolve_seir(Iᵣ_sim ./ popsize, K_RSV) * M_r
+    Wᵢ_sim = sym_convolve_seir(Iᵢ_sim ./ popsize, kernels.flu) * M_f
+    Wᵥ_sim = sym_convolve_seir(Iᵥ_sim ./ popsize, kernels.cov) * M_c
+    Wᵣ_sim = sym_convolve_seir(Iᵣ_sim ./ popsize, kernels.rsv) * M_r
     
     lod_ww_flu = 1.0 # fix lod values
     lod_ww_rsv = 1.0
@@ -508,8 +519,9 @@ end
     end
 end
 
-function run_inference(name, m0_or_m1) 
-    m0_or_m1 in (:null, :m1) || error("null_or_alter must be either :null or :m1")
+function run_inference(name, m0_or_m1, kernel=:base) 
+    m0_or_m1 in (:null, :m1, :m2) || error("null_or_alter must be either :null or :m1")
+    kernel in (:base, :common, :long) || error("kernel must be either :base, :common, or :long")
     df, province_params = read_province(name) 
 
     obs_flu = df.flu_sg
@@ -521,9 +533,11 @@ function run_inference(name, m0_or_m1)
 
     # for type stability: Turing.DynamicPPL.DebugUtils.model_warntype(_m1)    
     if m0_or_m1 == :m1
-        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=false)
-    else 
-        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=true)
+        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=false, freetheta=false, kernels = KERNELS[kernel])
+    elseif m0_or_m1 == :m2
+        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=false, freetheta=true,  kernels = KERNELS[kernel])
+    elseif m0_or_m1 == :null
+        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=true, kernels = KERNELS[kernel])
     end
     chains = sample(_m1, NUTS(), MCMCThreads(), 4000, 4)    
     return chains
@@ -564,11 +578,46 @@ end
 function run_all_scenarios() 
     provs = ["Ontario", "British Columbia", "Alberta", "Manitoba", "Quebec", "Nova Scotia"]
     for prov in provs
-        m0 = run_inference(prov, :null)
-        m1 = run_inference(prov, :m1)
-        save_chain("outputs/chain_$(prov)_null.jls", m0)
+        #m0 = run_inference(prov, :null)
+        m1 = run_inference(prov, :m1, :base)
+        m2 = run_inference(prov, :m2, :base)
+        kA = run_inference(prov, :m1, :common);
+        kB = run_inference(prov, :m1, :long);
+
+        #save_chain("outputs/chain_$(prov)_null.jls", m0)
         save_chain("outputs/chain_$(prov)_m1.jls", m1)
+        save_chain("outputs/chain_$(prov)_m2.jls", m2)
+        save_chain("outputs/chain_$(prov)_m1_kcommon.jls", kA)
+        save_chain("outputs/chain_$(prov)_m1_klong.jls", kB)
     end
+end
+
+function hpc_run() 
+    # ##salloc --nodes=6 --ntasks=6 --cpus-per-task=4
+    # better: salloc --ntasks=24 --cpus-per-task=4 
+    # export JULIA_NUM_THREADS=$SLURM_CPUS_PER_TASK
+    # julia +1.11.5 --project=. --threads=4
+    # using Distributed, SlurmClusterManager, Revise
+    # addprocs(SlurmManager())
+    # @everywhere using Revise
+    # @everywhere includet("script.jl")
+    provs = ["Ontario", "British Columbia", "Alberta", "Manitoba", "Quebec", "Nova Scotia"]
+    
+    jobs = []
+    for prov in provs
+        push!(jobs, (prov, :m1, :base))
+        push!(jobs, (prov, :m2, :base))
+        push!(jobs, (prov, :m1, :common))
+        push!(jobs, (prov, :m1, :long))
+    end
+    println("Running $(length(jobs)) jobs in parallel on $(nprocs()) processors")
+    res = pmap(jobs) do job
+        prov, model, kind = job
+        a = run_inference(prov, model, kind)
+        save_chain("outputs/chain_$(prov)_$(model)_$(kind).jls", a)
+        return nothing
+    end
+    println("HPC run complete")
 end
 
 #### POST HOC - ANALYSIS FUNCTIONS
@@ -586,14 +635,13 @@ function _calc_stats(inc_mat)
             mean_time, low_time, high_time
 end
 
-function _calculate_Rt(t, t_school, beta_base, beta_peak, N, S, P1, P2, θ)
+function _calculate_Rt(t, t_school, beta_base, beta_peak, N, S, P1, P2, θ, γ)
     # internal function to be called from chain_analysis() 
-    γᵢ = 1/4.0
     tl = @. logistic((t - t_school)/7) # tl is vector
     βt = @. beta_base + (beta_peak - beta_base) * tl
     S_frac = S / N
     interference =  exp.(-θ .* (P1 .+ P2) ./ N )
-    rt =  @. βt / γᵢ * S_frac * interference    
+    rt =  @. βt / γ * S_frac * interference    
     return rt
 end
 
@@ -659,6 +707,8 @@ function chain_analysis(chain, name; plot_figs = true)
     mtype = Symbol("θ") in keys(chain)
     mtype ? println("Model includes θ (cross-immunity factor)") : println("Model is the NULL, does NOT include θ (null model)")
     
+    kernels = KERNELS[:base]
+
     for i in 1:n_samples
         # extract the parameters for this sample
         θ = mtype ? samples[:θ][i] : 0.0
@@ -712,9 +762,9 @@ function chain_analysis(chain, name; plot_figs = true)
         Iᵥ = make_incidence(sol[14, :])
         Iᵣ = make_incidence(sol[15, :])
                 
-        Wf = sym_convolve_seir(Iᵢ ./ popsize, K_FLU) * M_f
-        Wc = sym_convolve_seir(Iᵥ ./ popsize, K_COV) * M_c
-        Wr = sym_convolve_seir(Iᵣ ./ popsize, K_RSV) * M_r
+        Wf = sym_convolve_seir(Iᵢ ./ popsize, kernels.flu) * M_f
+        Wc = sym_convolve_seir(Iᵥ ./ popsize, kernels.cov) * M_c
+        Wr = sym_convolve_seir(Iᵣ ./ popsize, kernels.rsv) * M_r
 
         for w in 1:weeks
             idx_end = w * 7
@@ -735,14 +785,14 @@ function chain_analysis(chain, name; plot_figs = true)
         inc_rsv[i, :] = Iᵣ
 
         # calculate Rt (make sure to send correct prevalence for each virus (so cov, rsv for flu etc))
-        Rt_flu[i, :] = _calculate_Rt(sol.t, t_school_flu, βᵢ_base, βᵢ_peak, popsize, Sᵢ, Pᵥ, Pᵣ, θ)
-        Rt_cov[i, :] = _calculate_Rt(sol.t, t_school_cov, βᵥ_base, βᵥ_peak, popsize, Sᵥ, Pᵢ, Pᵣ, θ)
-        Rt_rsv[i, :] = _calculate_Rt(sol.t, t_school_rsv, βᵣ_base, βᵣ_peak, popsize, Sᵣ, Pᵢ, Pᵥ, θ)
+        Rt_flu[i, :] = _calculate_Rt(sol.t, t_school_flu, βᵢ_base, βᵢ_peak, popsize, Sᵢ, Pᵥ, Pᵣ, θ, 1/4)
+        Rt_cov[i, :] = _calculate_Rt(sol.t, t_school_cov, βᵥ_base, βᵥ_peak, popsize, Sᵥ, Pᵢ, Pᵣ, θ, 1/5)
+        Rt_rsv[i, :] = _calculate_Rt(sol.t, t_school_rsv, βᵣ_base, βᵣ_peak, popsize, Sᵣ, Pᵢ, Pᵥ, θ, 1/5)
 
         # calculate Rt counterfactual (theta = 0, but not NULL model so other parameters are the same) 
-        Rt_flu_cf[i, :] = _calculate_Rt(sol.t, t_school_flu, βᵢ_base, βᵢ_peak, popsize, Sᵢ, Pᵥ, Pᵣ, 0)
-        Rt_cov_cf[i, :] = _calculate_Rt(sol.t, t_school_cov, βᵥ_base, βᵥ_peak, popsize, Sᵥ, Pᵢ, Pᵣ, 0)
-        Rt_rsv_cf[i, :] = _calculate_Rt(sol.t, t_school_rsv, βᵣ_base, βᵣ_peak, popsize, Sᵣ, Pᵢ, Pᵥ, 0)
+        Rt_flu_cf[i, :] = _calculate_Rt(sol.t, t_school_flu, βᵢ_base, βᵢ_peak, popsize, Sᵢ, Pᵥ, Pᵣ, 0, 1/4)
+        Rt_cov_cf[i, :] = _calculate_Rt(sol.t, t_school_cov, βᵥ_base, βᵥ_peak, popsize, Sᵥ, Pᵢ, Pᵣ, 0, 1/5)
+        Rt_rsv_cf[i, :] = _calculate_Rt(sol.t, t_school_rsv, βᵣ_base, βᵣ_peak, popsize, Sᵣ, Pᵢ, Pᵥ, 0, 1/5)
     end
 
     # print statistics
@@ -936,15 +986,17 @@ function run_analysis_all_prov()
     # and saves the results to a log file 
     # log file can be parsed later for generating summary tables of the results across provinces)
     provs = ["British Columbia", "Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec"]
-    open("outputs/full_results.log", "w") do io
+    suffix = "m2_base" #m1_base, m1_common, m1_long, m2_base
+    println("running $suffix")
+    open("outputs/full_results_$suffix.log", "w") do io
         redirect_stdout(io) do
             for prov in provs
                 println("=== Province: $prov === M1 RESULTS ===")
-                m1 = read_chain("outputs/chain_$(prov)_m1.jls")
+                m1 = read_chain("outputs/chain_$(prov)_$(suffix).jls")
                 chain_analysis(m1, prov, plot_figs = false)
-                println("=== Province: $prov === M0 / NULL RESULTS ===")
-                m0 = read_chain("outputs/chain_$(prov)_null.jls")
-                chain_analysis(m0, prov, plot_figs = false)    
+                # println("=== Province: $prov === M0 / NULL RESULTS ===")
+                # m0 = read_chain("outputs/chain_$(prov)_null.jls")
+                # chain_analysis(m0, prov, plot_figs = false)    
             end
         end
     end

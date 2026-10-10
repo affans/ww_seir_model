@@ -24,4 +24,5 @@ JuliaLocalPreferences.toml
 *.svg 
 *.png
 outputs/
+v1_outputs/
 watch_and_sync.sh
