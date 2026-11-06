@@ -8,6 +8,8 @@ using Gnuplot, PrettyTables, TerminalPager, GarishPrint
 using Dates, Parameters, Configurations, Match, JSON
 using Serialization, Hyperopt, Printf, LaTeXStrings
 
+# julia version: julia +1.11.5 --project=. --threads=4
+
 Gnuplot.options.term = "sixelgd truecolor enhanced size 900,450 scroll font Arial 12"
 # when adding new packages, avoid precompilation by
 # pkg> add --preserve=all Example 
@@ -61,6 +63,7 @@ function make_incidence(X)
 end
 apply_sg(vec) = savitzky_golay(vec, 7, 1).y
 logistic(x) = 1.0 / (1.0 + exp(-x))
+pm(chain, s) = mean(vec(Array(chain[s])))   # posterior mean helper
 
 function read_province(name) 
     # unable to do: New Brunswick and Sask 
@@ -347,7 +350,7 @@ function sym_convolve_seir(incidence, kernel)
 end
 
 # set up a Turing model 
-@model function inference_model(obs_ww_flu, obs_ww_cov, obs_ww_rsv, hyperparams, province_params; nullmodel=false, freetheta=false, kernels=KERNELS[:base])
+@model function inference_model(obs_ww_flu, obs_ww_cov, obs_ww_rsv, hyperparams, province_params; nullmodel=false, freetheta=false, kernels=KERNELS[:base], θ_scale=2.0, lod_flu=1.0, lod_cov=1.0, lod_rsv=1.0)
     # if nullmodel == true, theta is set to zero manually 
     # meaning there is no sampled theta - adjust post hoc scripts accordingly.
    
@@ -433,9 +436,9 @@ end
     if nullmodel
         θ = 0.0
     elseif freetheta
-        θ ~ Normal(0, 2.0)        # sign-unconstrained sensitivity analysis
+        θ ~ Normal(0, θ_scale)        # sign-unconstrained sensitivity analysis
     else
-        θ ~ Truncated(Normal(0, 2.0), 0, Inf)
+        θ ~ Truncated(Normal(0, θ_scale), 0, Inf)
     end
 
     ε_flu ~ hyperparams.ε_flu
@@ -470,8 +473,10 @@ end
     Wᵥ_sim = sym_convolve_seir(Iᵥ_sim ./ popsize, kernels.cov) * M_c
     Wᵣ_sim = sym_convolve_seir(Iᵣ_sim ./ popsize, kernels.rsv) * M_r
     
-    lod_ww_flu = 1.0 # fix lod values
-    lod_ww_rsv = 1.0
+    #lod_ww_flu = 1.0 # fix lod values
+    #lod_ww_rsv = 1.0
+    lod_ww_flu = lod_flu
+    lod_ww_rsv = lod_rsv
 
     #likelyhood, but we'll have to go in weeks 
     for w in 1:weeks 
@@ -519,7 +524,7 @@ end
     end
 end
 
-function run_inference(name, m0_or_m1, kernel=:base) 
+function run_inference(name, m0_or_m1, kernel=:base, θ_scale=2.0, lod_flu=1.0, lod_rsv=1.0) 
     m0_or_m1 in (:null, :m1, :m2) || error("null_or_alter must be either :null or :m1")
     kernel in (:base, :common, :long) || error("kernel must be either :base, :common, or :long")
     df, province_params = read_province(name) 
@@ -533,11 +538,11 @@ function run_inference(name, m0_or_m1, kernel=:base)
 
     # for type stability: Turing.DynamicPPL.DebugUtils.model_warntype(_m1)    
     if m0_or_m1 == :m1
-        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=false, freetheta=false, kernels = KERNELS[kernel])
+        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=false, freetheta=false, kernels = KERNELS[kernel], θ_scale=θ_scale, lod_flu=lod_flu, lod_rsv=lod_rsv)
     elseif m0_or_m1 == :m2
-        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=false, freetheta=true,  kernels = KERNELS[kernel])
+        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=false, freetheta=true,  kernels = KERNELS[kernel], θ_scale=θ_scale, lod_flu=lod_flu, lod_rsv=lod_rsv)
     elseif m0_or_m1 == :null
-        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=true, kernels = KERNELS[kernel])
+        _m1 = inference_model(obs_flu, obs_covid, obs_rsv, hp, province_params; nullmodel=true, kernels = KERNELS[kernel], θ_scale=θ_scale)
     end
     chains = sample(_m1, NUTS(), MCMCThreads(), 4000, 4)    
     return chains
@@ -576,11 +581,13 @@ function read_chain(filename)
 end
 
 function run_all_scenarios() 
+    # !! USE hpc_run() as it contains updates 
+    # to how run_inference is called, and it runs in parallel on HPC.
     provs = ["Ontario", "British Columbia", "Alberta", "Manitoba", "Quebec", "Nova Scotia"]
     for prov in provs
         #m0 = run_inference(prov, :null)
         m1 = run_inference(prov, :m1, :base)
-        m2 = run_inference(prov, :m2, :base)
+        m2 = run_inference(prov, :m2, :base) 
         kA = run_inference(prov, :m1, :common);
         kB = run_inference(prov, :m1, :long);
 
@@ -603,18 +610,28 @@ function hpc_run()
     # @everywhere includet("script.jl")
     provs = ["Ontario", "British Columbia", "Alberta", "Manitoba", "Quebec", "Nova Scotia"]
     
+    # m1: base with constrained theta
+    # m2: base with unconstrained theta
     jobs = []
     for prov in provs
-        push!(jobs, (prov, :m1, :base))
-        push!(jobs, (prov, :m2, :base))
-        push!(jobs, (prov, :m1, :common))
-        push!(jobs, (prov, :m1, :long))
+        # args: province, model, kind, scale, lod_flu, lod_rsv
+        # default scale was  2.0
+        # lod_flu, lod_rsv = 1.0 gives back base case
+        push!(jobs, (prov, :m1, :base, 2.0, 0.5,  0.5))
+        push!(jobs, (prov, :m1, :base, 2.0, 2.0,  2.0))
+        #push!(jobs, (prov, :m1, :base, 2.0, 0.25, 0.25))   # optional
+        #push!(jobs, (prov, :m2, :base, 2.0)) 
+        #push!(jobs, (prov, :m1, :common, 2.0))
+        #push!(jobs, (prov, :m1, :long, 2.0))
     end
     println("Running $(length(jobs)) jobs in parallel on $(nprocs()) processors")
     res = pmap(jobs) do job
-        prov, model, kind = job
-        a = run_inference(prov, model, kind)
-        save_chain("outputs/chain_$(prov)_$(model)_$(kind).jls", a)
+        prov, model, kind, scale, lod_flu, lod_rsv = job
+        println("Running inference for $(prov), model=$(model), kind=$(kind), scale=$(scale), lod_flu=$(lod_flu), lod_rsv=$(lod_rsv)")
+        a = run_inference(prov, model, kind, scale, lod_flu, lod_rsv)
+        _lodflustr = replace(string(lod_flu), "." => "")
+        _lodrsvstr = replace(string(lod_rsv), "." => "")
+        save_chain("outputs/r2rev_$(prov)_$(model)_$(kind)_lodflu$(_lodflustr)_lodrsv$(_lodrsvstr).jls", a)
         return nothing
     end
     println("HPC run complete")
@@ -857,10 +874,35 @@ function chain_analysis(chain, name; plot_figs = true)
 
     # rope suppression
     if mtype
-        rope_flu = rope_suppression(samples, prev_cov, prev_rsv, popsize)
-        rope_cov = rope_suppression(samples, prev_flu, prev_rsv, popsize)
-        rope_rsv = rope_suppression(samples, prev_flu, prev_cov, popsize)
-        println("\nROPE suppression (proportion of posterior distribution where suppression < 10%):
+        println("\nROPE suppression (proportion of posterior distribution where suppression < threshold):")
+        rope_flu = rope_suppression(samples, prev_cov, prev_rsv, popsize; threshold = 0.10)
+        rope_cov = rope_suppression(samples, prev_flu, prev_rsv, popsize; threshold = 0.10)
+        rope_rsv = rope_suppression(samples, prev_flu, prev_cov, popsize; threshold = 0.10)
+        println("\n 10% threshold:
+        Flu: $(round(rope_flu, digits=2))
+        Covid: $(round(rope_cov, digits=2))
+        RSV: $(round(rope_rsv, digits=2))")
+
+        rope_flu = rope_suppression(samples, prev_cov, prev_rsv, popsize; threshold = 0.05)
+        rope_cov = rope_suppression(samples, prev_flu, prev_rsv, popsize; threshold = 0.05)
+        rope_rsv = rope_suppression(samples, prev_flu, prev_cov, popsize; threshold = 0.05)
+        println("\n 5% threshold:
+        Flu: $(round(rope_flu, digits=2))
+        Covid: $(round(rope_cov, digits=2))
+        RSV: $(round(rope_rsv, digits=2))")
+
+        rope_flu = rope_suppression(samples, prev_cov, prev_rsv, popsize; threshold = 0.15)
+        rope_cov = rope_suppression(samples, prev_flu, prev_rsv, popsize; threshold = 0.15)
+        rope_rsv = rope_suppression(samples, prev_flu, prev_cov, popsize; threshold = 0.15)
+        println("\n 15% threshold:
+        Flu: $(round(rope_flu, digits=2))
+        Covid: $(round(rope_cov, digits=2))
+        RSV: $(round(rope_rsv, digits=2))")
+
+        rope_flu = rope_suppression(samples, prev_cov, prev_rsv, popsize; threshold = 0.20)
+        rope_cov = rope_suppression(samples, prev_flu, prev_rsv, popsize; threshold = 0.20)
+        rope_rsv = rope_suppression(samples, prev_flu, prev_cov, popsize; threshold = 0.20)
+        println("\n 20% threshold:
         Flu: $(round(rope_flu, digits=2))
         Covid: $(round(rope_cov, digits=2))
         RSV: $(round(rope_rsv, digits=2))")
@@ -968,6 +1010,9 @@ function chain_analysis(chain, name; plot_figs = true)
 end
 
 function rope_suppression(samples, prev_a, prev_b, popsize; threshold=0.10)
+    # the posterior probability, P(peak suppression > threshold).
+    # across all plausible parameter sets from the posterior, 
+    # what fraction give a peak suppression above the threshold? 
     n_draws = length(samples[:θ])
     mask = ones(Bool, n_draws)
     p_above = 0.0
@@ -981,18 +1026,53 @@ function rope_suppression(samples, prev_a, prev_b, popsize; threshold=0.10)
     return p_above / n_draws
 end
 
+function savage_dickey()
+
+    provs = ["British Columbia", "Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec"]
+    for prov in provs
+        println("PROV: $prov")
+        ch = read_chain("outputs/chain_$(prov)_m2_base.jls")
+        θ  = vec(Array(ch[:θ])) # all draws (4 chains × 4000)
+        prior0 = pdf(Normal(0, 2.0), 0.0)
+        println("prior density at 0: $(prior0)")
+
+        # posterior density at 0: kernel density estimate (main) and normal approximation (check)
+        post0_kde  = pdf(kde(θ), 0.0)
+        post0_norm = pdf(Normal(mean(θ), std(θ)), 0.0)
+        println("posterior density at 0: KDE=$(post0_kde), normal approx=$(post0_norm)")
+
+        cap_limit = 5000
+        bf10_kde  = prior0 / post0_kde
+        bf10_norm = prior0 / post0_norm
+        println("BF10 (KDE) = $(bf10_kde), BF10 (normal approx) = $(bf10_norm)")
+        if (!isfinite(bf10_kde) || bf10_kde > cap_limit)
+            println("BF10 (KDE) exceeds cap of $(cap_limit), reporting lower bound")
+        end
+        #bf_str =  (!isfinite(bf10_kde) || bf10_kde > cap) ? "> $(Int(cap))" : @sprintf("%.1f", bf10_kde)
+        println("""
+            mean θ: $(mean(θ)),
+            draws ≤ 0: $(count(<=(0), θ) / length(θ)),
+            BF10 (KDE): $(bf10_kde),
+            BF10 (normal approx): $(bf10_norm)
+        """)
+    end
+    
+end
+
+
 function run_analysis_all_prov() 
     # runs the chain analysis for all provinces 
     # and saves the results to a log file 
     # log file can be parsed later for generating summary tables of the results across provinces)
     provs = ["British Columbia", "Alberta", "Ontario", "Manitoba", "Nova Scotia","Quebec"]
-    suffix = "m2_base" #m1_base, m1_common, m1_long, m2_base
+    suffix = "m1_base" #m1_base, m1_common, m1_long, m2_base
+    prefix = "chain" # or chain for primary analysis or r2rev for revisions
     println("running $suffix")
     open("outputs/full_results_$suffix.log", "w") do io
         redirect_stdout(io) do
             for prov in provs
                 println("=== Province: $prov === M1 RESULTS ===")
-                m1 = read_chain("outputs/chain_$(prov)_$(suffix).jls")
+                m1 = read_chain("outputs/$(prefix)_$(prov)_$(suffix).jls")
                 chain_analysis(m1, prov, plot_figs = false)
                 # println("=== Province: $prov === M0 / NULL RESULTS ===")
                 # m0 = read_chain("outputs/chain_$(prov)_null.jls")
@@ -1301,6 +1381,57 @@ function plot_ridgeplots()
     @gp
 end
 
+# function plot_prior_posterior()
+#     # for the reviewer #2
+#     provs = ["Alberta", "Ontario", "Manitoba", "Nova Scotia", "Quebec", "British Columbia"]
+#     prior = truncated(Normal(0, 2), 0, Inf)
+#     x = collect(range(0, 20, length=400))
+#     @gp "reset" 
+#     @gp :- "set multiplot layout 2,3" :-
+#     for (k, prov) in enumerate(provs)
+#         θ = vec(Array(deserialize("outputs/chain_$(prov)_m1_base.jls")[:θ]))
+#         post = pdf(kde(θ), x)
+#         @gp :- k "set title '$(prov)'" "set xrange [0:20]" "set xlabel 'θ'" :-
+#         @gp :- k x pdf.(prior, x) "w l lw 2 dt 2 lc rgb 'gray50' t 'Prior'" :-
+#         @gp :- k x post "w l lw 2 lc rgb 'blue' t 'Posterior'" :-
+#     end
+#     @gp
+#     #Gnuplot.save("outputs/prior_posterior_theta.pdf", term="pdfcairo size 9in,5in")
+# end
+
+
+function plot_prior_posterior()
+    # the difference between this one and the above is that 
+    # this one has the prior mirrored on the negative side, 
+    # so it meets the posterior at zero.
+
+    provs = ["Alberta","Ontario","Manitoba","Nova Scotia","Quebec","British Columbia"]
+    prior = truncated(Normal(0, 2), 0, Inf)
+    xpos  = collect(range(0, 20, length=400))
+    xneg  = collect(range(-6, 0, length=150))
+    yneg  = pdf.(prior, -xneg)                  # mirrored, so it meets the prior at zero
+
+
+    # before the loop: compute a common y-limit
+    ymax = 0.0
+    posts = Dict{String,Vector{Float64}}()
+    for prov in provs
+        θ = vec(Array(deserialize("outputs/chain_$(prov)_m1_base.jls")[:θ]))
+        posts[prov] = pdf(kde(θ), xpos)
+        ymax = max(ymax, maximum(posts[prov]))
+    end
+    ymax = 1.05 * max(ymax, pdf(prior, 0.0))
+
+    @gp "reset" "set multiplot layout 2,3" :-
+    for (k, prov) in enumerate(provs)
+        @gp :- k "set title '$(prov)'" "set xrange [-6:20]" "set yrange [0:$(ymax)]" "set xlabel 'θ'" "set ylabel 'Density'" :-
+        @gp :- k xneg yneg              "w l lw 1.5 dt 2 lc rgb 'gray80' notitle" :-
+        @gp :- k xpos pdf.(prior, xpos) "w l lw 2 lc rgb 'gray40' t 'Prior'" :-
+        @gp :- k xpos posts[prov]       "w l lw 2 lc rgb 'blue' t 'Posterior'" :-
+    end
+    @gp
+    Gnuplot.save("outputs/prior_posterior_theta.pdf", term="pdfcairo enhanced size 6.5in,5in font 'Helvetica, 12'")
+end
 
 function plot_theta_vs_covid_ranked()
     # ordered low to high by θ posterior mean
